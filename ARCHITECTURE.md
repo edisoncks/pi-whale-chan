@@ -53,6 +53,27 @@ emit a patch every turn, and the prompt cache would never hold. Because it is
 constant, re-setting it each turn produces **no diff** — zero extra tokens and
 zero invalidation while the persona is enabled.
 
+### Why the persona carries bilingual voice anchors
+
+The persona voice used to be anchored only by Chinese example lines. In English
+turns the model had no lexical anchor for the register, so it matched the user's
+language (hard rule 1) and fell back to the default flat assistant voice — the
+persona silently dropped out. Rule 5 ("don't reduce the character to one tic")
+compounds this in English, where the persona signal is already weak.
+
+Fixes, all content-only and still inside the frozen constant:
+
+- Rules 1/2 merged: language-following is now bound to *who is speaking*
+  ("switching language is not switching back to plain assistant"), with an
+  explicit negative example of drift.
+- Added an English `Voice examples` block that mirrors the Chinese tone.
+- Added a final self-check line, so the section ends on the constraint (highest
+  recency at the tail of the system prompt).
+
+This costs tokens every turn. A cheaper alternative — a full English mirror of
+the persona — was rejected as too expensive; a `turn_end` drift detector that
+re-prompts (`continue: true`) was rejected as fragile and loop-prone.
+
 ### Why default is ON
 
 Installing the extension is the opt-in. A persona extension that does nothing
