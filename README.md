@@ -61,3 +61,14 @@ pi remove git:github.com/edisoncks/pi-whale-chan
 ## Docs
 
 Curious how it works? See [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Credits & Attribution
+
+Whale-chan (深度求索鲸鱼娘) is a **non-official, community-created fan character** and is not
+affiliated with DeepSeek. This extension's persona is aligned with the community
+[DeepSeek Whale-chan](https://github.com/Neko3000/deepseek-whalechan) character specification;
+its design docs are shared under [CC-BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
+Original character-design credits belong to the community and its original creators.
+
+This is a **non-commercial fan project**. DeepSeek and related brand names belong to their
+respective owners.

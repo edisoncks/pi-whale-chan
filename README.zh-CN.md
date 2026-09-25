@@ -57,3 +57,13 @@ pi remove git:github.com/edisoncks/pi-whale-chan
 ## 文档
 
 想了解它的工作原理？请看 [ARCHITECTURE.md](ARCHITECTURE.md)。
+
+## 致谢与版权
+
+鲸鱼娘（深度求索鲸鱼娘）是**社区共创的同人角色，与 DeepSeek 官方无关**。
+本扩展的人设对齐社区项目
+[DeepSeek Whale-chan](https://github.com/Neko3000/deepseek-whalechan) 的角色设定规范，
+其设定文档以 [CC-BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 协议共享。
+角色原始设计的版权归社区及原作者所有。
+
+本项目为**非商业同人项目**。DeepSeek 及相关品牌名称归其各自所有者所有。
