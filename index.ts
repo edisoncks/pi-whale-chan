@@ -41,8 +41,12 @@ const STATE_FILE = "whale-chan.json";
 
 const AVATAR_ENTRY_TYPE = "whale_avatar";
 const AVATAR_SIZE_PX = 200;
-const AVATAR_MIME = "image/webp";
-const AVATAR_PATH = join(dirname(fileURLToPath(import.meta.url)), "assets", "whale-chan.webp");
+// Kitty's graphics protocol transfers PNG only (`f=100`), so the TUI draws a
+// 256px PNG: it renders at ~200px and the downscale keeps every inline
+// re-transmission cheap. The original 1254px webp stays as the README asset;
+// it is never sent to a Kitty terminal as if it were PNG (blank rows).
+const AVATAR_MIME = "image/png";
+const AVATAR_PATH = join(dirname(fileURLToPath(import.meta.url)), "assets", "whale-chan.png");
 
 interface WhaleAvatarData {
 	/** Target edge length in pixels. Recorded so entries stay self-describing. */

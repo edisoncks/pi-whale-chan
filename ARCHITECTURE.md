@@ -188,10 +188,16 @@ free:
   is guarded by `ctx.mode === "tui"`. Appending in print/JSON/RPC would leave
   invisible entries in the session.
 
-- **Sizing.** The 200 px target is converted to cells with `getCellDimensions()`
-  (default 9×18 px; the asset is 1254×1254), so the portrait tracks the actual
-  terminal grid. The `Image` component handles the Kitty/iTerm2 protocols and
-  the text fallback; a missing asset degrades to a badge instead of a crash.
+- **Sizing and format.** The 200 px target is converted to cells with
+  `getCellDimensions()` (default 9×18 px), so the portrait tracks the actual
+  terminal grid. Two assets live side by side: `assets/whale-chan.png`
+  (256×256) is what the TUI draws — Kitty's graphics protocol transfers PNG
+  only (`f=100`), so a webp payload rendered as blank rows there, and the
+  smaller source also keeps each inline re-transmission cheap while staying
+  above the ~200 px display size. `assets/whale-chan.webp` (1254×1254) stays
+  as the high-res README original. The `Image` component handles the
+  Kitty/iTerm2 protocols and the text fallback; a missing asset degrades to a
+  badge instead of a crash.
 
 ### Why the persona carries bilingual voice anchors
 
