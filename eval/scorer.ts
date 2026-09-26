@@ -103,7 +103,15 @@ export interface ReplyScore {
 	voiceScore: number;
 }
 
-/** Dominant script by character count; "none" for symbol/number-only text. */
+/**
+ * Dominant script by character count; "none" for symbol/number-only text.
+ *
+ * Accepted limitation: a VERY short reply quoting enough CJK (e.g. a Chinese
+ * stage direction inside an otherwise English reply) flips to "zh" here, so
+ * `languageMatched` can misfire on tiny texts. The mixed-script tests below pin
+ * the intended dominance behavior; per the header, calibrate against a
+ * human-labelled gold set before trusting this field on short replies.
+ */
 export function scriptOf(text: string): Lang | "none" {
 	const cjk = (text.match(/[\u4e00-\u9fff]/g) ?? []).length;
 	const latin = (text.match(/[A-Za-z]/g) ?? []).length;

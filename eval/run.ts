@@ -50,7 +50,14 @@ function parseArgs(argv: string[]) {
 	};
 	for (let i = 2; i < argv.length; i++) {
 		const a = argv[i];
-		const next = () => argv[++i];
+		// Fail loud at the parse site: a missing value used to yield `undefined`
+		// or consume the next option, then fail later with an unrelated error.
+		const next = () => {
+			if (i + 1 >= argv.length || argv[i + 1].startsWith("--")) {
+				throw new Error(`missing value for ${a}`);
+			}
+			return argv[++i];
+		};
 		if (a === "--model") out.model = next();
 		else if (a === "--conditions") out.conditions = next().split(",").map((s) => s.trim()).filter(Boolean);
 		else if (a === "--scenarios") out.scenarios = next().split(",").map((s) => s.trim()).filter(Boolean);
@@ -61,6 +68,7 @@ function parseArgs(argv: string[]) {
 		}
 		else if (a === "--thinking") out.thinking = next() as typeof out.thinking;
 		else if (a === "--replay") out.replay = next();
+		else throw new Error(`unknown argument: ${a}`);
 	}
 	return out;
 }

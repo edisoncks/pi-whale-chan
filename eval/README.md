@@ -54,8 +54,8 @@ n=30 compared `bookend+B` vs `full`; the clean pair was only n=8).
 A second mechanism — a throttled tool-result anchor ("A") — was evaluated here
 and **removed**: across n=30 per arm it showed no measurable effect
 (in-character 29/30 with and without it; language and stage-language deltas
-within one or two samples). The evidence lives on the `exp/drop-tool-anchor`
-branch.
+within one or two samples). See [the merged implementation PR](https://github.com/edisoncks/pi-whale-chan/pull/1)
+and the [pinned experiment notes](https://github.com/edisoncks/pi-whale-chan/blob/9a0108185ad72977d5685911256cd24f3abba403/eval/README.md#L52-L58).
 
 ## Run it
 
