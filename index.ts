@@ -11,15 +11,48 @@
  * - The persona text is a frozen constant (persona.ts): no cwd/date/model
  *   interpolation, so re-setting it every turn produces no diff.
  * - Custom sections render after `cwd`, so a toggle only moves the prompt tail.
+ * - The persona is bookended: the full text is the tail section, and a short
+ *   voice rule is merged into the early `rules` section via promptGuidelines.
+ *   Both are frozen constants and injection is idempotent, so the bookend is
+ *   still diff-free while the persona stays on.
+ * - Bookends live in the system prompt, which sits before all tool output, so
+ *   they cannot anchor generation that follows a tool result. One append-only
+ *   recency anchor closes that gap: a transient user-role tail anchor via the
+ *   `context` event. A clean `bookend` vs `full` ablation at n=30/arm measures
+ *   the gain (+10pp in-character, +10pp language match); see ARCHITECTURE.md.
+ *   It is a pure append, so it cannot invalidate the cached prefix. (A second,
+ *   tool-result anchor was tried and removed: it showed no measurable effect —
+ *   see eval/README.md.)
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { WHALE_PERSONA } from "./persona.js";
+import { WHALE_PERSONA, WHALE_VOICE_RULE, WHALE_TAIL_ANCHOR } from "./persona.js";
 
 const SECTION_NAME = "whale_persona";
 const STATE_FILE = "whale-chan.json";
+
+/**
+ * Mechanism switches — ablation only. Production (Pi) calls the factory with one
+ * argument and gets every mechanism; the eval harness passes explicit flags so
+ * an effect can be attributed to a single mechanism (see eval/run.ts). Defaults
+ * keep production behavior byte-identical.
+ */
+export interface WhaleMechanisms {
+	/** Tail section: the full persona body (`WHALE_PERSONA`). */
+	readonly persona?: boolean;
+	/** Head rule: `WHALE_VOICE_RULE` merged into `promptGuidelines`. */
+	readonly headRule?: boolean;
+	/** Transient user-role tail anchor after a tool result. */
+	readonly tailAnchor?: boolean;
+}
+
+const ALL_MECHANISMS: Required<WhaleMechanisms> = {
+	persona: true,
+	headRule: true,
+	tailAnchor: true,
+};
 
 // No agent dir: memory-only. Never fall back to a relative path and litter
 // the user's CWD with a state file.
@@ -76,7 +109,8 @@ function saveEnabled(enabled: boolean): boolean {
 	}
 }
 
-export default function whaleChan(pi: ExtensionAPI) {
+export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms = {}) {
+	const M = { ...ALL_MECHANISMS, ...mechanisms };
 	// Fail-open default; no IO at factory time. session_start is the single
 	// source of truth for config.
 	let enabled = true;
@@ -95,12 +129,58 @@ export default function whaleChan(pi: ExtensionAPI) {
 
 	// Section patch, not prompt replacement: Pi diffs sections and appends only
 	// what changed. Re-setting an unchanged frozen string yields no diff.
+	//
+	// Bookend: the full persona is the tail section, while WHALE_VOICE_RULE is
+	// merged into the early `rules` section (promptGuidelines). Tool output is
+	// appended after the system prompt and pushes the tail out of recency, so
+	// the head rule is the counter-pressure.
+	//
+	// Each turn Pi calls `emitBeforeAgentStart`, which normalizes the base
+	// options into a fresh clone before invoking handlers, so `guidelines` here
+	// is a per-turn copy that never reaches `_baseSystemPromptOptions`. A bare
+	// push could not accumulate across turns. The `includes` guard is defensive
+	// insurance (should Pi ever hand handlers the shared base object), and
+	// removal on `off` keeps a shared array consistent if that day comes.
 	pi.on("before_agent_start", (event) => {
-		if (enabled) {
-			event.systemPromptOptions.sections[SECTION_NAME] = WHALE_PERSONA;
+		const options = event.systemPromptOptions;
+		const guidelines = options.promptGuidelines;
+		// Tail section (persona body) and head rule (bookend) are independent
+		// switches so the harness can isolate them; `off` clears both.
+		if (enabled && M.persona) {
+			options.sections[SECTION_NAME] = WHALE_PERSONA;
 		} else {
-			delete event.systemPromptOptions.sections[SECTION_NAME];
+			delete options.sections[SECTION_NAME];
 		}
+		if (enabled && M.headRule) {
+			if (!guidelines.includes(WHALE_VOICE_RULE)) {
+				guidelines.push(WHALE_VOICE_RULE);
+			}
+		} else {
+			for (let i = guidelines.length - 1; i >= 0; i--) {
+				if (guidelines[i] === WHALE_VOICE_RULE) guidelines.splice(i, 1);
+			}
+		}
+	});
+
+	// Authoritative tail anchor. `context` runs before every provider call
+	// and Pi restores the message list afterward, so this append is transient.
+	// It fires only when the last message is a tool result: that is the moment
+	// generation follows tool output and the register is most likely to drift.
+	// `custom` maps to user role (convertToLlm), so it carries instruction
+	// authority the system-prompt bookend cannot reach at that position. A pure
+	// tail append, so no cached prefix is invalidated.
+	pi.on("context", (event) => {
+		if (!enabled || !M.tailAnchor) return;
+		const last = event.messages[event.messages.length - 1];
+		if (!last || last.role !== "toolResult") return;
+		const anchor = {
+			role: "custom" as const,
+			customType: "whale_tail_anchor",
+			content: WHALE_TAIL_ANCHOR,
+			display: false,
+			timestamp: Date.now(),
+		};
+		return { messages: [...event.messages, anchor] };
 	});
 
 	pi.registerCommand("whale", {

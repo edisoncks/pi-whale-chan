@@ -24,8 +24,8 @@ the desired sections against the ones the model already has and sends a patch
 
 | File | Responsibility |
 |---|---|
-| `index.ts` | Config load/save, `before_agent_start` section injection, `/whale` command |
-| `persona.ts` | The frozen persona string (`WHALE_PERSONA`) |
+| `index.ts` | Config load/save, `before_agent_start` section injection, tail anchor, `/whale` command |
+| `persona.ts` | Frozen persona (`WHALE_PERSONA`) plus the voice rule and tail anchor (`WHALE_VOICE_RULE`, `WHALE_TAIL_ANCHOR`) |
 
 ## Design decisions
 
@@ -53,6 +53,107 @@ emit a patch every turn, and the prompt cache would never hold. Because it is
 constant, re-setting it each turn produces **no diff** — zero extra tokens and
 zero invalidation while the persona is enabled.
 
+### Why the persona is bookended
+
+A single tail section is not enough. The system prompt sits at the head of the
+context, but every tool result is appended *after* it, so during a long,
+tool-heavy turn the persona is far from the point of generation and its
+influence fades — the model copies the register of the nearby tool output. That
+is drift, and it is positional, not the model "forgetting" the character.
+
+Fix: bookend the prompt.
+
+- **Tail**: the full `WHALE_PERSONA` in the `whale_persona` section, unchanged.
+- **Head**: `WHALE_VOICE_RULE` merged into the early `rules` section via
+  `promptGuidelines`, phrased as an imperative so it competes with the default
+  rules ("Be concise") on equal footing instead of reading as flavor text.
+
+On the injection's safety: `agent-session.js` re-passes the same
+`_baseSystemPromptOptions` every turn, but `emitBeforeAgentStart`
+(`dist/core/extensions/runner.js`) normalizes it into a fresh clone before
+invoking handlers. `normalizeBuildSystemPromptOptions` copies `sections` and
+`promptGuidelines`, so each turn's handler mutates a private object and the base
+is never touched — the array cannot accumulate across turns even with an
+unconditional `push`.
+
+The `!guidelines.includes(...)` guard in `index.ts` is therefore **defensive**,
+not load-bearing: cheap insurance should Pi ever stop cloning and hand handlers
+the shared base object directly. `buildRules` also dedupes normalized rules
+before rendering (`dist/core/system-prompt.js`), so even a leaked duplicate could
+not change the emitted `<rules>` section; the only possible harm is an unbounded
+in-memory array. `test/bookend.test.mjs` pins both paths: the real clone-per-turn
+path (base options stay clean) and the defensive shared-object path (the guard
+keeps it at one copy).
+
+Those two assertions read Pi's internal `dist/core/system-prompt.js`, which is
+not in the package's `exports` map. The test treats that access as **optional**:
+it probes a few likely locations, validates the exports, and skips the two
+render-dependent cases (plus the two renderer-only assertions that follow) with an
+explicit reason if the internals move — so a Pi upgrade cannot hard-fail the
+suite on a package reshuffle. The anchor and language-binding tests need no
+internals and always run.
+
+This relies on the default preamble branch: `promptGuidelines` only renders
+into `rules` when no `customPrompt` is set (`buildSystemPromptSections`). With a
+user-supplied custom prompt, the tail section still applies and the head rule
+is simply absent.
+
+### Why the persona has a tail anchor
+
+The bookend lives entirely in the system prompt, and the system prompt sits
+before *all* tool output. During a long, tool-heavy run the nearest text to the
+generation point is a tool result, not the persona — so the bookend cannot
+anchor the generation that follows a tool call. One append-only anchor closes
+that positional gap (measured below):
+
+- **Tail anchor (`WHALE_TAIL_ANCHOR`).** The `context` event runs before
+  every provider call, and Pi restores the message list afterward, so appending
+  there is transient. It fires only when the last message is a `toolResult` —
+  exactly the moment generation follows tool output. `convertToLlm` maps a
+  `custom` message to the **user** role, the strongest instruction channel, and
+  the append is at the very tail, so position and authority point the same way.
+
+  **Measured effect (clean ablation).** A dedicated `bookend` vs `full` run at
+  n=30 per arm isolates this mechanism alone (same model, `en-6` + `zh-6`):
+
+  | arm | in-character | language match | stage-language ok | mean voice |
+  |---|---:|---:|---:|---:|
+  | `bookend` | 77% | 80% | 75% | 5.40 |
+  | `full` | 87% | 90% | 79% | 5.87 |
+
+  The tail anchor is worth roughly +10pp in-character and +10pp language match,
+  with a smaller stage-language gain — the first clean evidence that the
+  positional gap is real and that the pure append closes it. Caveats: one model,
+  n=30, no confidence intervals, and the scorer is a smoke signal (see
+  eval/README.md), so read it as indicative rather than precise.
+
+**A tool-result anchor was tried and removed.** An earlier iteration also
+appended a suffix to every Nth tool result, on the weaker "tool output is data"
+channel, for persistence through repetition. An ablation (`eval/`, n=30 per arm)
+found no measurable effect — in-character 29/30 with and without it, and
+language/stage-language deltas within one or two samples — so it was dropped
+rather than kept for a benefit that could not be measured.
+
+**Cache safety.** Provider prefix caching keys on the prefix: a change *before*
+the cached boundary invalidates it, but a pure tail append never does. The anchor
+is a pure append — a transient message at the tail — so it emits no
+system-prompt checkpoint and does not diverge an already-cached prefix.
+
+**Cost.** The tail anchor is a fresh, uncached tail on each request. `context`
+also fires on the first request of a turn, but the handler skips it unless the
+last message is a tool result, so the user-prompt case (already covered by the
+bookend) stays free.
+
+**Phrasing.** Because the anchor is delivered as a user-role message, it is
+phrased as a "style cue … needs no reply" so the model continues the task
+instead of answering the cue. It also binds the output language to the user's
+("reply in the user's language") and carries a short Chinese echo. The persona
+body is Chinese-dominant, so an English-only sentence sitting at the most
+influential position could bias a non-English turn toward English — a rule-1
+drift, i.e. the very failure the anchor exists to prevent. The binding is
+language-agnostic, so it holds for Chinese, Japanese, German, or anything else,
+rather than guessing the language by script.
+
 ### Why the persona carries bilingual voice anchors
 
 The persona voice used to be anchored only by Chinese example lines. In English
@@ -66,6 +167,12 @@ Fixes, all content-only and still inside the frozen constant:
 - Rules 1/2 merged: language-following is now bound to *who is speaking*
   ("switching language is not switching back to plain assistant"), with an
   explicit negative example of drift.
+- Rule 1 binds the *whole* message — prose, interjections, and the *…* stage
+  directions — to the user's language, and rule 2 says the tail descriptions
+  take that same language. Previously rule 1 named only "语气词与口癖", so English
+  turns localized the prose while the action lines stayed Chinese (`*尾巴一甩*`).
+  `test/bookend.test.mjs` pins the binding and the English stage-direction
+  example.
 - Added an English `Voice examples` block that mirrors the Chinese tone.
 - Added a final self-check line, so the section ends on the constraint (highest
   recency at the tail of the system prompt).
@@ -88,7 +195,8 @@ flag drives `before_agent_start` from then on.
 
 ### Why persistence looks the way it does
 
-`getAgentDir()` respects a custom agent dir and `PI_AGENT_DIR`. Saves are
+`getAgentDir()` respects a custom agent dir and `PI_CODING_AGENT_DIR` (the
+`${APP_NAME}_CODING_AGENT_DIR` env var, `APP_NAME = "pi"`). Saves are
 atomic (tmp + rename) so a crash never leaves a half-written file. Reads fail
 open (missing = on) and heal corruption to `{"enabled": true}` with a warning.
 A failed persist warns instead of crashing, so the UI never lies about the
@@ -101,13 +209,20 @@ state across restarts.
 3. The section name matches `/^[a-z][a-z0-9_-]*$/` and is not `preamble`.
 4. `/whale status` never writes to disk.
 5. Persistence failures never crash the agent.
+6. `WHALE_VOICE_RULE` is byte-identical at runtime and injected into
+   `promptGuidelines`. The guard is defensive, not load-bearing: Pi clones the
+   options per turn, so the array never grows across turns regardless.
+7. The tail anchor is a pure append and never touches the system prompt:
+   `WHALE_TAIL_ANCHOR` is appended only when the last message is a tool result.
+   It is a frozen constant.
 
 ## Recipes
 
 ### Change the persona text
 
 Edit `persona.ts` only. Keep it a plain template literal (no backticks or
-`${` inside the text).
+`${` inside the text). `WHALE_VOICE_RULE` is under the same invariant: keep it
+frozen, and keep the injection guarded (see Invariants).
 
 ### Add a `/whale` subcommand
 

@@ -15,7 +15,7 @@ rice-loving, brilliant-but-lazy AI in a blue-and-white maid dress.
 
 Turn it on and Pi stops sounding like a plain assistant. It talks back, flicks
 its tail, calls you "Master", and still does the actual work. It replies in
-whatever language you write in.
+whatever language you write in — stage directions and all.
 
 ## Install
 
@@ -38,7 +38,7 @@ Your choice is remembered and applies to future sessions.
 
 ## What changes
 
-- The way Pi talks: playful, teasing, a little dramatic.
+- The way Pi talks: playful, teasing, a little dramatic — and it keeps that voice through long, tool-heavy turns instead of fading into flat assistant prose.
 
 ## What doesn't change
 

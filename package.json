@@ -29,7 +29,10 @@
     ]
   },
   "scripts": {
-    "typecheck": "tsc --noEmit --skipLibCheck"
+    "typecheck": "tsc --noEmit --skipLibCheck",
+    "test": "node --test test/",
+    "eval": "node eval/run.ts",
+    "eval:probe": "node eval/probe.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
