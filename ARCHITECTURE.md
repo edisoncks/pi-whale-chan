@@ -192,16 +192,30 @@ free:
 
 - **Sizing and format.** The 200 px target is converted to cells with
   `getCellDimensions()` (default 9×18 px), so the portrait tracks the actual
-  terminal grid. Two assets live side by side: `assets/whale-chan.png`
-  (256×256) is what the TUI draws — Kitty's graphics protocol transfers PNG
-  only (`f=100`), so a webp payload rendered as blank rows there, and the
-  smaller source also keeps each inline re-transmission cheap while staying
-  above the ~200 px display size. `assets/whale-chan.webp` (1254×1254) stays
-  as the high-res README original. The entry renders inside a `Box(1, 0)` so
-  the portrait carries the same one-column inset as transcript prose
-  (`outputPad`, default 1); custom entries otherwise render flush left. The
-  `Image` component handles the Kitty/iTerm2 protocols and the text fallback;
-  a missing asset degrades to a badge instead of a crash.
+  terminal grid. Two assets live side by side: `assets/whale-chan-avatar.png`
+  (256×256), downscaled from the 1254×1254 original and named by role (a
+  derived asset) rather than by pixel size (which would go stale on a
+  re-export), is what the TUI draws. `Image` transmits PNG (`f=100`), the common
+  denominator: Kitty also accepts raw RGB/RGBA (`f=24`/`f=32`) but has no webp
+  payload type, so the full-resolution webp rendered as blank rows there. The
+  256px source also keeps each inline re-transmission cheap while staying above
+  the ~200 px display size. `assets/whale-chan.webp` (1254×1254) stays as the
+  high-res README original. The entry renders inside a `Box(1, 0)` to match the
+  transcript's one-column inset; `EntryRenderOptions` only exposes `expanded`,
+  so `outputPad` is not reachable and the value assumes its default of 1 (with
+  `outputPad=0` the prose goes flush left and the avatar drifts one column).
+  Custom entries otherwise render flush left. The `Image` component handles the
+  Kitty/iTerm2 protocols and the text fallback; a missing asset degrades to a
+  badge instead of a crash.
+
+- **Dependency.** The entry renderer is a hard top-level import of
+  `@earendil-works/pi-tui` (`Box`, `Image`, `Text`, `getCellDimensions`), so it
+  is a required peer rather than an optional one. `pi-tui` is a direct
+  dependency of `pi-coding-agent`, which Pi already supplies, so the module is
+  always resolvable in practice; only a missing *asset* degrades gracefully.
+  Lazy-loading the module so a missing `pi-tui` disables the avatar instead of
+  the whole extension would be the alternative, at the cost of an async import
+  in the factory.
 
 ### Why the persona carries bilingual voice anchors
 

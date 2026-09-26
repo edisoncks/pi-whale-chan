@@ -41,12 +41,14 @@ const STATE_FILE = "whale-chan.json";
 
 const AVATAR_ENTRY_TYPE = "whale_avatar";
 const AVATAR_SIZE_PX = 200;
-// Kitty's graphics protocol transfers PNG only (`f=100`), so the TUI draws a
-// 256px PNG: it renders at ~200px and the downscale keeps every inline
-// re-transmission cheap. The original 1254px webp stays as the README asset;
-// it is never sent to a Kitty terminal as if it were PNG (blank rows).
+// The TUI draws whale-chan-avatar.png (256px, downscaled from the 1254px
+// whale-chan.webp original). `Image` transmits PNG (`f=100`), the common
+// denominator: Kitty also accepts raw RGB/RGBA (`f=24`/`f=32`) but has no webp
+// payload type, so the full-resolution webp rendered as blank rows there.
+// Drawing at ~200px from a 256px source keeps each inline re-transmission
+// cheap.
 const AVATAR_MIME = "image/png";
-const AVATAR_PATH = join(dirname(fileURLToPath(import.meta.url)), "assets", "whale-chan.png");
+const AVATAR_PATH = join(dirname(fileURLToPath(import.meta.url)), "assets", "whale-chan-avatar.png");
 
 interface WhaleAvatarData {
 	/** Target edge length in pixels. Recorded so entries stay self-describing. */
@@ -197,8 +199,10 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 			});
 		}
 		// Custom entries render flush left, while transcript prose carries Pi's
-		// one-column output inset (outputPad, default 1). Box supplies the same
-		// inset so the portrait lines up with the surrounding text.
+		// output inset. EntryRenderOptions only exposes `expanded`, so the
+		// configured outputPad is not reachable here; assume the default (1).
+		// With outputPad=0 the prose goes flush left and this single-column
+		// inset becomes a one-column drift.
 		const box = new Box(1, 0);
 		box.addChild(avatar);
 		return box;

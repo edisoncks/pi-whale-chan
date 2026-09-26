@@ -48,7 +48,7 @@ const sandbox = mkdtempSync(join(tmpdir(), "whale-avatar-test-"));
 process.env.PI_CODING_AGENT_DIR = sandbox;
 
 const { default: whaleChan } = await import("../index.ts");
-const { setCapabilities } = await import("@earendil-works/pi-tui");
+const { setCapabilities, resetCapabilitiesCache } = await import("@earendil-works/pi-tui");
 
 const AVATAR_TYPE = "whale_avatar";
 const THEME = { fg: (_color, text) => text };
@@ -166,11 +166,14 @@ test("renderer emits Kitty PNG graphics where supported", () => {
 	const lines = component.render(80);
 
 	assert.match(lines[0], /^ \x1b_G/, "the image carries the transcript's one-column inset");
-	assert.match(lines[0], /f=100/, "the payload is declared as PNG (the only kitty transfer format)");
+	assert.match(lines[0], /f=100/, "the payload is declared as PNG (the format Image transmits)");
 	assert.ok(lines[0].includes("iVBORw0KGgo"), "the payload starts with the PNG signature");
 	assert.ok(lines.length > 1, "the image reserves multiple terminal rows");
 });
 
 after(() => {
+	// setCapabilities() writes the shared capability cache in pi-tui; drop it so
+	// a later consumer in this process re-detects instead of inheriting the stub.
+	resetCapabilitiesCache();
 	rmSync(sandbox, { recursive: true, force: true });
 });

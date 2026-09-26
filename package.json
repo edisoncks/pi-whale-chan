@@ -22,7 +22,7 @@
     "README.md",
     "README.zh-CN.md",
     "ARCHITECTURE.md",
-    "assets/whale-chan.png",
+    "assets/whale-chan-avatar.png",
     "assets/whale-chan.webp",
     "LICENSE"
   ],
@@ -43,9 +43,6 @@
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
-      "optional": true
-    },
-    "@earendil-works/pi-tui": {
       "optional": true
     }
   },
