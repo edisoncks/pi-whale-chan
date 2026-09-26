@@ -18,12 +18,14 @@
   },
   "files": [
     "index.ts",
+    "pet.ts",
     "persona.ts",
     "README.md",
     "README.zh-CN.md",
     "ARCHITECTURE.md",
-    "assets/whale-chan-avatar.png",
+    "ASSET_ATTRIBUTION.md",
     "assets/whale-chan.webp",
+    "assets/whale-pet/",
     "LICENSE"
   ],
   "pi": {

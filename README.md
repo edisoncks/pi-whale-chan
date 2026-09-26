@@ -32,18 +32,31 @@ Start a new Pi session after installing.
 | `/whale` | Toggle the persona on or off |
 | `/whale on` | Turn it on |
 | `/whale off` | Turn it off |
-| `/whale status` | Show whether it is currently on |
+| `/whale status` | Show the state of both switches |
+| `/whale pet` | Toggle the animated pet strip |
+| `/whale pet on` | Turn the pet strip on |
+| `/whale pet off` | Turn the pet strip off |
 
-Your choice is remembered and applies to future sessions.
+Your choice is remembered and applies to future sessions. The persona and the
+pet strip are **independent switches**: turning the persona off leaves the pet
+running, and vice versa.
 
 ## What changes
 
 - The way Pi talks: playful, teasing, a little dramatic — and it keeps that voice through long, tool-heavy turns instead of fading into flat assistant prose.
-- Before every reply — including the ones that follow tool calls — whale-chan's
-  avatar appears in the transcript: a 200×200 px portrait in terminals with
-  inline-image support (Kitty, iTerm2). Terminals without image support show a
-  compact text badge instead. The avatar is display-only: it never enters the
-  model context or your token usage.
+- Above the editor, a **pet strip**: whale-chan animates beside a four-line
+  status panel — model • thinking level • context window, a context progress
+  bar, cumulative input/output tokens with cache-hit rate and cost, and the
+  working directory. She hugs her pillow and dozes off while idle, and types on a
+  laptop while a turn is running. The strip is framed in the input
+  box's own border colour — which follows the thinking level — with a rule across
+  the top and a divider between the avatar and the panel, so it reads as part of
+  the editor rather than a floating banner. It needs a terminal that speaks the
+  Kitty graphics protocol (Kitty,
+  Ghostty, WezTerm, Rio, Warp); anywhere else
+  it degrades to a text-only status line, because iTerm2's inline-image protocol
+  cannot place an animated image beside text without scrambling it. The strip
+  is display-only and never enters the model context.
 
 ## What doesn't change
 
@@ -74,6 +87,12 @@ affiliated with DeepSeek. This extension's persona is aligned with the community
 [DeepSeek Whale-chan](https://github.com/Neko3000/deepseek-whalechan) character specification;
 its design docs are shared under [CC-BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).
 Original character-design credits belong to the community and its original creators.
+
+The animated pet strip is derived from
+[dsh-whale-pet](https://github.com/Er1c0v0/dsh-whale-pet) by Er1c0v0, used under
+[CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/); see
+[ASSET_ATTRIBUTION.md](ASSET_ATTRIBUTION.md) for the exact scope and the list of
+modifications.
 
 This is a **non-commercial fan project**. DeepSeek and related brand names belong to their
 respective owners.

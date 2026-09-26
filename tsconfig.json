@@ -11,5 +11,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["index.ts", "persona.ts", "eval/**/*.ts"]
+  "include": ["index.ts", "pet.ts", "persona.ts", "eval/**/*.ts"]
 }
