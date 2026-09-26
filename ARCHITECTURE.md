@@ -182,7 +182,7 @@ free:
   result. Each one appends its own avatar, so the final answer is never left
   bare. (An earlier one-per-user-message design did exactly that and was fixed:
   the code only had to drop the pending flag and append on every assistant
-  `message_start`.) The 200 px portrait is ~12 rows, so a long tool chain does
+  `message_start`.) The 200 px portrait is ~11 rows, so a long tool chain does
   repeat it; that is the cost of a per-reply portrait, and `/whale off` turns
   it off.
 
@@ -210,12 +210,13 @@ free:
 
 - **Dependency.** The entry renderer is a hard top-level import of
   `@earendil-works/pi-tui` (`Box`, `Image`, `Text`, `getCellDimensions`), so it
-  is a required peer rather than an optional one. `pi-tui` is a direct
-  dependency of `pi-coding-agent`, which Pi already supplies, so the module is
-  always resolvable in practice; only a missing *asset* degrades gracefully.
-  Lazy-loading the module so a missing `pi-tui` disables the avatar instead of
-  the whole extension would be the alternative, at the cost of an async import
-  in the factory.
+  is a required peer rather than an optional one — as is
+  `@earendil-works/pi-coding-agent`, whose `getAgentDir` is a top-level import.
+  `pi-tui` is a direct dependency of `pi-coding-agent`, which Pi already
+  supplies, so the module is always resolvable in practice; only a missing
+  *asset* degrades gracefully. Lazy-loading the module so a missing `pi-tui`
+  disables the avatar instead of the whole extension would be the alternative,
+  at the cost of an async import in the factory.
 
 ### Why the persona carries bilingual voice anchors
 
@@ -298,8 +299,9 @@ persist it with `saveEnabled`.
 
 ### Rename the section
 
-Change `SECTION_NAME` in `index.ts`. It is used for both injection and removal,
-so a rename is a one-line change.
+Change `SECTION_NAME` in `index.ts` and the mirrored `SECTION_NAME` constant in
+`test/bookend.test.mjs`. In `index.ts` it is used for both injection and
+removal, so the extension-side change is one line.
 
 ## Docs rule
 
