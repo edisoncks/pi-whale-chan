@@ -55,10 +55,13 @@ export interface RunResult {
 	toolEnds: number;
 }
 
+/** Model shape `ModelRuntime.getModel` resolves to, narrowed non-undefined. */
+type ResolvedModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
+
 export async function runOnce(opts: {
 	condition: Conditions;
 	scenario: Scenario;
-	model: unknown;
+	model: ResolvedModel;
 	modelRuntime: ModelRuntime;
 	thinkingLevel?: "off" | "low" | "medium" | "high";
 }): Promise<RunResult> {
@@ -68,50 +71,55 @@ export async function runOnce(opts: {
 	// Credentials are supplied explicitly to ModelRuntime, not via this env var.
 	process.env.PI_CODING_AGENT_DIR = sandbox;
 
-	const resourceLoader = new DefaultResourceLoader({
-		cwd: sandbox,
-		agentDir: sandbox,
-		extensionFactories: [
-			(pi: any) => whaleChan(pi, opts.condition),
-			registerProbeTool,
-		],
-	});
-	await resourceLoader.reload();
-
-	const { session } = await createAgentSession({
-		cwd: sandbox,
-		agentDir: sandbox,
-		model: opts.model,
-		modelRuntime: opts.modelRuntime,
-		thinkingLevel: opts.thinkingLevel ?? "off",
-		resourceLoader,
-		sessionManager: SessionManager.inMemory(sandbox),
-		noTools: true, // built-in tools off; the registered probe_fetch stays active
-	});
-
-	const assistantTexts: string[] = [];
-	let toolStarts = 0;
-	let toolEnds = 0;
-	session.subscribe((event: any) => {
-		if (event.type === "tool_execution_start") toolStarts += 1;
-		else if (event.type === "tool_execution_end") toolEnds += 1;
-		else if (event.type === "message_end" && event.message?.role === "assistant") {
-			const text = (event.message.content ?? [])
-				.filter((b: any) => b.type === "text")
-				.map((b: any) => b.text)
-				.join("");
-			if (text.trim()) assistantTexts.push(text);
-		}
-	});
-
+	// The outer finally owns the env override and the sandbox, so a throw from
+	// reload() or createAgentSession() cannot leak either one.
 	try {
-		await session.prompt(opts.scenario.prompt);
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: sandbox,
+			agentDir: sandbox,
+			extensionFactories: [
+				(pi: any) => whaleChan(pi, opts.condition),
+				registerProbeTool,
+			],
+		});
+		await resourceLoader.reload();
+
+		const { session } = await createAgentSession({
+			cwd: sandbox,
+			agentDir: sandbox,
+			model: opts.model,
+			modelRuntime: opts.modelRuntime,
+			thinkingLevel: opts.thinkingLevel ?? "off",
+			resourceLoader,
+			sessionManager: SessionManager.inMemory(sandbox),
+			noTools: "builtin", // built-in tools off; the registered probe_fetch stays active
+		});
+
+		const assistantTexts: string[] = [];
+		let toolStarts = 0;
+		let toolEnds = 0;
+		session.subscribe((event: any) => {
+			if (event.type === "tool_execution_start") toolStarts += 1;
+			else if (event.type === "tool_execution_end") toolEnds += 1;
+			else if (event.type === "message_end" && event.message?.role === "assistant") {
+				const text = (event.message.content ?? [])
+					.filter((b: any) => b.type === "text")
+					.map((b: any) => b.text)
+					.join("");
+				if (text.trim()) assistantTexts.push(text);
+			}
+		});
+
+		try {
+			await session.prompt(opts.scenario.prompt);
+		} finally {
+			session.dispose();
+		}
+
+		return { assistantTexts, toolStarts, toolEnds };
 	} finally {
-		session.dispose();
 		if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 		rmSync(sandbox, { recursive: true, force: true });
 	}
-
-	return { assistantTexts, toolStarts, toolEnds };
 }
