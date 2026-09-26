@@ -6,10 +6,12 @@
  * registered entry renderer, so it must:
  *
  * - never enter the LLM context (custom entries are excluded by contract),
- * - fire once per user message, not once per tool-loop round,
- * - land between the user entry and the assistant entry: `before_agent_start`
- *   and the first `turn_start` fire before the user message is persisted, so
- *   the entry is appended at the assistant's `message_start` instead,
+ * - fire before every assistant message (every reply, including the ones that
+ *   follow tool results), not once per user message,
+ * - land after the previous entry and before the assistant entry:
+ *   `before_agent_start` and the first `turn_start` fire before the user
+ *   message is persisted, so the entry is appended at the assistant's
+ *   `message_start` instead,
  * - stay TUI-only, because other modes have no entry renderers.
  *
  * It runs the real extension through Node's native TS support; the resolve hook
@@ -79,11 +81,7 @@ async function start(handlers, ctx) {
 	await handlers.get("session_start")({ type: "session_start", reason: "startup" }, ctx);
 }
 
-async function userMessage(handlers, ctx) {
-	await handlers.get("message_end")({ type: "message_end", message: { role: "user" } }, ctx);
-}
-
-async function assistantMessage(handlers, ctx, role = "assistant") {
+async function messageStarts(handlers, ctx, role) {
 	await handlers.get("message_start")({ type: "message_start", message: { role } }, ctx);
 }
 
@@ -92,43 +90,38 @@ test("registers the avatar entry renderer", () => {
 	assert.ok(renderers.has(AVATAR_TYPE), "whale_avatar renderer is registered");
 });
 
-test("appends exactly one avatar between a user message and the next reply", async () => {
+test("appends an avatar before an assistant reply", async () => {
 	const { handlers, entries, ctx } = makeHarness();
 	await start(handlers, ctx);
 
-	await userMessage(handlers, ctx);
-	assert.equal(entries.length, 0, "nothing appended when the user message lands");
-
-	await assistantMessage(handlers, ctx);
+	await messageStarts(handlers, ctx, "assistant");
 	assert.equal(entries.length, 1, "one avatar appended when the reply starts");
 	assert.equal(entries[0].type, AVATAR_TYPE);
 	assert.deepEqual(entries[0].data, { px: 200 }, "the entry records the target edge length");
-
-	// Tool-loop continuation: another assistant message, no new user message.
-	await assistantMessage(handlers, ctx);
-	assert.equal(entries.length, 1, "no duplicate avatar for a tool-loop continuation");
 });
 
-test("a new user message arms the next avatar", async () => {
+test("every reply in a tool-heavy run gets its own avatar", async () => {
+	// Regression: an earlier one-per-user-message design left the reply after
+	// the tool calls — the one the user is reading — without an avatar.
 	const { handlers, entries, ctx } = makeHarness();
 	await start(handlers, ctx);
 
-	for (let turn = 1; turn <= 3; turn++) {
-		await userMessage(handlers, ctx);
-		await assistantMessage(handlers, ctx);
-		assert.equal(entries.length, turn, `turn ${turn}: one avatar per user message`);
-	}
+	// narration -> tool -> reply -> tool -> reply
+	await messageStarts(handlers, ctx, "assistant");
+	await messageStarts(handlers, ctx, "toolResult");
+	await messageStarts(handlers, ctx, "assistant");
+	await messageStarts(handlers, ctx, "toolResult");
+	await messageStarts(handlers, ctx, "assistant");
+
+	assert.equal(entries.length, 3, "three replies -> three avatars");
 });
 
-test("non-assistant messages never consume the pending avatar", async () => {
+test("non-assistant messages get no avatar", async () => {
 	const { handlers, entries, ctx } = makeHarness();
 	await start(handlers, ctx);
 
-	await userMessage(handlers, ctx);
-	await assistantMessage(handlers, ctx, "toolResult");
-	assert.equal(entries.length, 0, "a tool result neither triggers nor consumes the avatar");
-	await assistantMessage(handlers, ctx);
-	assert.equal(entries.length, 1, "the reply still gets its avatar");
+	await messageStarts(handlers, ctx, "toolResult");
+	assert.equal(entries.length, 0, "tool results are not replies");
 });
 
 test("the avatar follows the /whale toggle", async () => {
@@ -136,13 +129,11 @@ test("the avatar follows the /whale toggle", async () => {
 	await start(handlers, ctx);
 
 	await commands.get("whale").handler("off", ctx);
-	await userMessage(handlers, ctx);
-	await assistantMessage(handlers, ctx);
+	await messageStarts(handlers, ctx, "assistant");
 	assert.equal(entries.length, 0, "off: no avatar");
 
 	await commands.get("whale").handler("on", ctx);
-	await userMessage(handlers, ctx);
-	await assistantMessage(handlers, ctx);
+	await messageStarts(handlers, ctx, "assistant");
 	assert.equal(entries.length, 1, "on: avatar is back");
 });
 
@@ -150,24 +141,8 @@ test("non-TUI modes append nothing", async () => {
 	const { handlers, entries, ctx } = makeHarness("print");
 	await start(handlers, ctx);
 
-	await userMessage(handlers, ctx);
-	await assistantMessage(handlers, ctx);
+	await messageStarts(handlers, ctx, "assistant");
 	assert.equal(entries.length, 0, "print mode has no entry renderers -> no entries");
-
-	// The pending flag is consumed even without a renderer, so a second reply
-	// cannot append a late avatar either.
-	await assistantMessage(handlers, ctx);
-	assert.equal(entries.length, 0, "flag stays consumed");
-});
-
-test("agent_settled clears an armed avatar from an aborted run", async () => {
-	const { handlers, entries, ctx } = makeHarness();
-	await start(handlers, ctx);
-
-	await userMessage(handlers, ctx);
-	await handlers.get("agent_settled")({ type: "agent_settled" }, ctx);
-	await assistantMessage(handlers, ctx);
-	assert.equal(entries.length, 0, "stale flag does not leak into a later run");
 });
 
 test("renderer falls back to a text badge without image support", () => {

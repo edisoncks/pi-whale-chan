@@ -23,8 +23,8 @@
  *   It is a pure append, so it cannot invalidate the cached prefix. (A second,
  *   tool-result anchor was tried and removed: it showed no measurable effect —
  *   see eval/README.md.)
- * - The avatar is display-only: a `whale_avatar` custom entry appended when the
- *   next assistant message starts, rendered inline by an entry renderer. Custom
+ * - The avatar is display-only: a `whale_avatar` custom entry appended before
+ *   each assistant message, rendered inline by an entry renderer. Custom
  *   entries never enter the LLM context, so the avatar cannot change the prompt,
  *   its diff, or the cache. TUI only: other modes have no entry renderers.
  */
@@ -153,10 +153,6 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	// Fail-open default; no IO at factory time. session_start is the single
 	// source of truth for config.
 	let enabled = true;
-	// Armed by a user message, consumed by the next assistant message: one
-	// avatar per user message, not per model round. A 200px portrait is ~12
-	// rows tall; one per tool-loop round would flood the transcript.
-	let avatarPending = false;
 
 	pi.on("session_start", (_event, ctx) => {
 		const cfg = loadConfig();
@@ -170,28 +166,16 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 		}
 	});
 
-	// The avatar entry must sort after the user entry and before the assistant
-	// entry. `before_agent_start` and the run's first `turn_start` both fire
-	// before the user message is persisted (agent-loop emits them before the
-	// initial message_start/message_end pair), so appending there would land the
-	// avatar *above* the user's message after a reload. By the assistant's
-	// `message_start`, the user entry is persisted and the assistant entry is
-	// not yet written (it lands at message_end): that gap is exactly one reply.
-	pi.on("message_end", (event) => {
-		if (enabled && event.message.role === "user") avatarPending = true;
-	});
-
+	// Every assistant message is a reply, and a tool-heavy run emits several
+	// (narration, then post-tool answers), so each one gets its own avatar.
+	// The append must sort after the previous entry and before this assistant
+	// entry: `before_agent_start`/`turn_start` fire before the user entry is
+	// persisted, while by the assistant's `message_start` the previous message
+	// is persisted and the assistant entry is not yet written (it lands at
+	// message_end). That gap is exactly one reply.
 	pi.on("message_start", (event, ctx) => {
-		if (!avatarPending || event.message.role !== "assistant") return;
-		avatarPending = false;
-		if (!enabled || ctx.mode !== "tui") return;
+		if (!enabled || ctx.mode !== "tui" || event.message.role !== "assistant") return;
 		pi.appendEntry<WhaleAvatarData>(AVATAR_ENTRY_TYPE, { px: AVATAR_SIZE_PX });
-	});
-
-	// A run can end without an assistant message (abort, or an error before the
-	// first token). Drop a pending flag so it cannot leak into a later run.
-	pi.on("agent_settled", () => {
-		avatarPending = false;
 	});
 
 	// Display-only: custom entries are not part of the LLM context (see

@@ -167,22 +167,24 @@ free:
   cache-prefix divergence. A custom entry is drawn locally only, so the prompt,
   its diff, and the cache are untouched.
 
-- **Placement.** The entry must sort after the user entry and before the
+- **Placement.** The entry must sort after the previous message and before the
   assistant entry. `before_agent_start` and the run's first `turn_start` fire
   *before* the user message is persisted (`agent-loop` emits them before its
   initial `message_start`/`message_end` pair, and `agent-session` persists a
   message on its `message_end`), so appending there would put the avatar above
-  the user's message after a reload. Instead a `message_end` handler arms a
-  pending flag for user messages and the assistant's `message_start` consumes
-  it: by then the user entry is persisted and the assistant entry is not yet
-  written. The session order is user → avatar → reply, on screen and after a
-  reload.
+  the user's message after a reload. The assistant's `message_start` is the
+  right gap: the previous message (user prompt or tool result) is persisted,
+  and the assistant entry is not yet written. The session order is
+  previous → avatar → reply, on screen and after a reload.
 
-- **One per user message.** The flag is one-shot, so a tool-heavy run with
-  several assistant messages gets one avatar, not one per round. A 200 px
-  portrait is roughly a dozen terminal rows; repeating it between tool results
-  would swamp the transcript. The flag is cleared on `agent_settled`, so an
-  aborted run cannot leak it into the next one.
+- **One per reply.** Every assistant message is a reply, and a tool-heavy run
+  emits several — narration before a tool call, then the answer after the tool
+  result. Each one appends its own avatar, so the final answer is never left
+  bare. (An earlier one-per-user-message design did exactly that and was fixed:
+  the code only had to drop the pending flag and append on every assistant
+  `message_start`.) The 200 px portrait is ~12 rows, so a long tool chain does
+  repeat it; that is the cost of a per-reply portrait, and `/whale off` turns
+  it off.
 
 - **TUI only.** Entry renderers exist in interactive mode only, so the append
   is guarded by `ctx.mode === "tui"`. Appending in print/JSON/RPC would leave
