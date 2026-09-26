@@ -22,6 +22,7 @@
     "README.md",
     "README.zh-CN.md",
     "ARCHITECTURE.md",
+    "assets/whale-chan-avatar.png",
     "assets/whale-chan.webp",
     "LICENSE"
   ],
@@ -37,7 +38,8 @@
     "eval:probe": "node eval/probe.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
@@ -46,6 +48,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.87.1",
+    "@earendil-works/pi-tui": "^0.87.1",
     "@types/node": "^22.20.3",
     "typescript": "^5.9.3"
   },

@@ -23,15 +23,37 @@
  *   It is a pure append, so it cannot invalidate the cached prefix. (A second,
  *   tool-result anchor was tried and removed: it showed no measurable effect —
  *   see eval/README.md.)
+ * - The avatar is display-only: a `whale_avatar` custom entry appended before
+ *   each assistant message, rendered inline by an entry renderer. Custom
+ *   entries never enter the LLM context, so the avatar cannot change the prompt,
+ *   its diff, or the cache. TUI only: other modes have no entry renderers.
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, getCellDimensions, Image, Text } from "@earendil-works/pi-tui";
 import { WHALE_PERSONA, WHALE_VOICE_RULE, WHALE_TAIL_ANCHOR } from "./persona.js";
 
 const SECTION_NAME = "whale_persona";
 const STATE_FILE = "whale-chan.json";
+
+const AVATAR_ENTRY_TYPE = "whale_avatar";
+const AVATAR_SIZE_PX = 200;
+// The TUI draws whale-chan-avatar.png (256px, downscaled from the 1254px
+// whale-chan.webp original). `Image` transmits PNG (`f=100`), the common
+// denominator: Kitty also accepts raw RGB/RGBA (`f=24`/`f=32`) but has no webp
+// payload type, so the full-resolution webp rendered as blank rows there.
+// Drawing at ~200px from a 256px source keeps each inline re-transmission
+// cheap.
+const AVATAR_MIME = "image/png";
+const AVATAR_PATH = join(dirname(fileURLToPath(import.meta.url)), "assets", "whale-chan-avatar.png");
+
+interface WhaleAvatarData {
+	/** Target edge length in pixels. Recorded so entries stay self-describing. */
+	px: number;
+}
 
 /**
  * Mechanism switches — ablation only. Production (Pi) calls the factory with one
@@ -62,6 +84,22 @@ function statePath(): string | null {
 	} catch {
 		return null;
 	}
+}
+
+// Lazy and cached: read once per process, never in the factory (some
+// invocations load extensions without starting a session). A missing or
+// unreadable asset disables the image, never the turn — the renderer shows a
+// text badge instead.
+let avatarBase64: string | null | undefined;
+
+function loadAvatarBase64(): string | null {
+	if (avatarBase64 !== undefined) return avatarBase64;
+	try {
+		avatarBase64 = readFileSync(AVATAR_PATH).toString("base64");
+	} catch {
+		avatarBase64 = null;
+	}
+	return avatarBase64;
 }
 
 // Single parse: missing reads as on, corrupt reads as on + flags corrupt.
@@ -128,6 +166,46 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 				ctx.ui.notify(`[whale-chan] could not persist config: ${persistError}`, "warning");
 			}
 		}
+	});
+
+	// Every assistant message is a reply, and a tool-heavy run emits several
+	// (narration, then post-tool answers), so each one gets its own avatar.
+	// The append must sort after the previous entry and before this assistant
+	// entry: `before_agent_start`/`turn_start` fire before the user entry is
+	// persisted, while by the assistant's `message_start` the previous message
+	// is persisted and the assistant entry is not yet written (it lands at
+	// message_end). That gap is exactly one reply.
+	pi.on("message_start", (event, ctx) => {
+		if (!enabled || ctx.mode !== "tui" || event.message.role !== "assistant") return;
+		pi.appendEntry<WhaleAvatarData>(AVATAR_ENTRY_TYPE, { px: AVATAR_SIZE_PX });
+	});
+
+	// Display-only: custom entries are not part of the LLM context (see
+	// ARCHITECTURE.md, "Why the avatar is a custom entry"). `Image` emits
+	// Kitty/iTerm2 graphics where supported and falls back to a text badge
+	// otherwise; a missing asset degrades to text, never to a failed render.
+	pi.registerEntryRenderer<WhaleAvatarData>(AVATAR_ENTRY_TYPE, (entry, _options, theme) => {
+		const base64 = loadAvatarBase64();
+		const px = entry.data?.px ?? AVATAR_SIZE_PX;
+		let avatar: Image | Text;
+		if (base64 === null) {
+			avatar = new Text(theme.fg("muted", "[whale-chan avatar unavailable]"), 0, 0);
+		} else {
+			const cell = getCellDimensions();
+			avatar = new Image(base64, AVATAR_MIME, { fallbackColor: (text) => theme.fg("muted", text) }, {
+				maxWidthCells: Math.max(1, Math.round(px / Math.max(1, cell.widthPx))),
+				maxHeightCells: Math.max(1, Math.round(px / Math.max(1, cell.heightPx))),
+				filename: AVATAR_PATH,
+			});
+		}
+		// Custom entries render flush left, while transcript prose carries Pi's
+		// output inset. EntryRenderOptions only exposes `expanded`, so the
+		// configured outputPad is not reachable here; assume the default (1).
+		// With outputPad=0 the prose goes flush left and this single-column
+		// inset becomes a one-column drift.
+		const box = new Box(1, 0);
+		box.addChild(avatar);
+		return box;
 	});
 
 	// Section patch, not prompt replacement: Pi diffs sections and appends only

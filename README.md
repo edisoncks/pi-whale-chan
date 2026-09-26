@@ -39,6 +39,11 @@ Your choice is remembered and applies to future sessions.
 ## What changes
 
 - The way Pi talks: playful, teasing, a little dramatic — and it keeps that voice through long, tool-heavy turns instead of fading into flat assistant prose.
+- Before every reply — including the ones that follow tool calls — whale-chan's
+  avatar appears in the transcript: a 200×200 px portrait in terminals with
+  inline-image support (Kitty, iTerm2). Terminals without image support show a
+  compact text badge instead. The avatar is display-only: it never enters the
+  model context or your token usage.
 
 ## What doesn't change
 
