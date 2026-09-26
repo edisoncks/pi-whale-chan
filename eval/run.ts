@@ -50,10 +50,12 @@ function parseArgs(argv: string[]) {
 	};
 	for (let i = 2; i < argv.length; i++) {
 		const a = argv[i];
-		// Fail loud at the parse site: a flag at end-of-argv used to yield
-		// `undefined` here and crash later with an unrelated-looking error.
+		// Fail loud at the parse site: a missing value used to yield `undefined`
+		// or consume the next option, then fail later with an unrelated error.
 		const next = () => {
-			if (i + 1 >= argv.length) throw new Error(`missing value for ${a}`);
+			if (i + 1 >= argv.length || argv[i + 1].startsWith("--")) {
+				throw new Error(`missing value for ${a}`);
+			}
 			return argv[++i];
 		};
 		if (a === "--model") out.model = next();
