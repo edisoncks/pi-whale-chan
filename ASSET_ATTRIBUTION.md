@@ -65,6 +65,4 @@ that must sit on an arbitrary terminal background.
 
 The whale-chan *character* is a community fan creation whose design credits
 belong to the community, covered by the "Credits & Attribution" section of
-[README.md](README.md). The transcript avatar
-(`assets/whale-chan-avatar.png`) and the persona text are unrelated to this
-attribution.
+[README.md](README.md). The persona text is unrelated to this attribution.

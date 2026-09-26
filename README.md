@@ -44,11 +44,6 @@ running, and vice versa.
 ## What changes
 
 - The way Pi talks: playful, teasing, a little dramatic — and it keeps that voice through long, tool-heavy turns instead of fading into flat assistant prose.
-- Before every reply — including the ones that follow tool calls — whale-chan's
-  avatar appears in the transcript: a 200×200 px portrait in terminals with
-  inline-image support (Kitty, iTerm2). Terminals without image support show a
-  compact text badge instead. The avatar is display-only: it never enters the
-  model context or your token usage.
 - Above the editor, a **pet strip**: whale-chan animates beside a four-line
   status panel — model • thinking level • context window, a context progress
   bar, cumulative input/output tokens with cache-hit rate and cost, and the
@@ -60,8 +55,8 @@ running, and vice versa.
   Kitty graphics protocol (Kitty,
   Ghostty, WezTerm, Rio, Warp); anywhere else
   it degrades to a text-only status line, because iTerm2's inline-image protocol
-  cannot place an animated image beside text without scrambling it. Like the
-  avatar, the strip is display-only and never enters the model context.
+  cannot place an animated image beside text without scrambling it. The strip
+  is display-only and never enters the model context.
 
 ## What doesn't change
 

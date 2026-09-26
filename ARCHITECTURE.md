@@ -24,7 +24,7 @@ the desired sections against the ones the model already has and sends a patch
 
 | File | Responsibility |
 |---|---|
-| `index.ts` | Config load/save, `before_agent_start` section injection, tail anchor, avatar entry + renderer, pet strip lifecycle, `/whale` command |
+| `index.ts` | Config load/save, `before_agent_start` section injection, tail anchor, pet strip lifecycle, `/whale` command |
 | `persona.ts` | Frozen persona (`WHALE_PERSONA`) plus the voice rule and tail anchor (`WHALE_VOICE_RULE`, `WHALE_TAIL_ANCHOR`) |
 | `pet.ts` | Frame tables and `WhalePetWidget` — the animated strip above the editor |
 
@@ -154,70 +154,6 @@ influential position could bias a non-English turn toward English — a rule-1
 drift, i.e. the very failure the anchor exists to prevent. The binding is
 language-agnostic, so it holds for Chinese, Japanese, German, or anything else,
 rather than guessing the language by script.
-
-### Why the avatar is a custom entry
-
-Before each reply the extension appends a `whale_avatar` entry and renders it
-inline through `registerEntryRenderer`. That choice is what keeps the feature
-free:
-
-- **Display-only.** Custom entries never participate in the LLM context
-  (`pi.appendEntry` stores them for the session, not for the model).
-  `sendMessage`/`sendUserMessage` would inject the portrait into the transcript
-  the model reads — spending image tokens on every reply and opening a new
-  cache-prefix divergence. A custom entry is drawn locally only, so the prompt,
-  its diff, and the cache are untouched.
-
-- **Placement.** The entry must sort after the previous message and before the
-  assistant entry. `before_agent_start` and the run's first `turn_start` fire
-  *before* the user message is persisted (`agent-loop` emits them before its
-  initial `message_start`/`message_end` pair, and `agent-session` persists a
-  message on its `message_end`), so appending there would put the avatar above
-  the user's message after a reload. The assistant's `message_start` is the
-  right gap: the previous message (user prompt or tool result) is persisted,
-  and the assistant entry is not yet written. The session order is
-  previous → avatar → reply, on screen and after a reload.
-
-- **One per reply.** Every assistant message is a reply, and a tool-heavy run
-  emits several — narration before a tool call, then the answer after the tool
-  result. Each one appends its own avatar, so the final answer is never left
-  bare. (An earlier one-per-user-message design did exactly that and was fixed:
-  the code only had to drop the pending flag and append on every assistant
-  `message_start`.) The 200 px portrait is ~11 rows, so a long tool chain does
-  repeat it; that is the cost of a per-reply portrait, and `/whale off` turns
-  it off.
-
-- **TUI only.** Entry renderers exist in interactive mode only, so the append
-  is guarded by `ctx.mode === "tui"`. Appending in print/JSON/RPC would leave
-  invisible entries in the session.
-
-- **Sizing and format.** The 200 px target is converted to cells with
-  `getCellDimensions()` (default 9×18 px), so the portrait tracks the actual
-  terminal grid. Two assets live side by side: `assets/whale-chan-avatar.png`
-  (256×256), downscaled from the 1254×1254 original and named by role (a
-  derived asset) rather than by pixel size (which would go stale on a
-  re-export), is what the TUI draws. `Image` transmits PNG (`f=100`), the common
-  denominator: Kitty also accepts raw RGB/RGBA (`f=24`/`f=32`) but has no webp
-  payload type, so the full-resolution webp rendered as blank rows there. The
-  256px source also keeps each inline re-transmission cheap while staying above
-  the ~200 px display size. `assets/whale-chan.webp` (1254×1254) stays as the
-  high-res README original. The entry renders inside a `Box(1, 0)` to match the
-  transcript's one-column inset; `EntryRenderOptions` only exposes `expanded`,
-  so `outputPad` is not reachable and the value assumes its default of 1 (with
-  `outputPad=0` the prose goes flush left and the avatar drifts one column).
-  Custom entries otherwise render flush left. The `Image` component handles the
-  Kitty/iTerm2 protocols and the text fallback; a missing asset degrades to a
-  badge instead of a crash.
-
-- **Dependency.** The entry renderer is a hard top-level import of
-  `@earendil-works/pi-tui` (`Box`, `Image`, `Text`, `getCellDimensions`), so it
-  is a required peer rather than an optional one — as is
-  `@earendil-works/pi-coding-agent`, whose `getAgentDir` is a top-level import.
-  `pi-tui` is a direct dependency of `pi-coding-agent`, which Pi already
-  supplies, so the module is always resolvable in practice; only a missing
-  *asset* degrades gracefully. Lazy-loading the module so a missing `pi-tui`
-  disables the avatar instead of the whole extension would be the alternative,
-  at the cost of an async import in the factory.
 
 ### Why the pet strip is hand-composed
 
@@ -364,15 +300,12 @@ state across restarts.
 7. The tail anchor is a pure append and never touches the system prompt:
    `WHALE_TAIL_ANCHOR` is appended only when the last message is a tool result.
    It is a frozen constant.
-8. The avatar is display-only: `whale_avatar` entries are appended with
-   `pi.appendEntry`, never with `sendMessage`/`sendUserMessage`, and the entry
-   renderer is side-effect-free.
-9. The pet strip is display-only: it is mounted with `ctx.ui.setWidget`, updated
+8. The pet strip is display-only: it is mounted with `ctx.ui.setWidget`, updated
    only by lifecycle events, and never calls `sendMessage`/`appendEntry`. Its
    frame timer is `unref()`'d and cleared in `dispose()`. Frame data is copied
    from the upstream source; the strip performs no IO beyond reading its own
    committed assets.
-10. The strip's separator mirrors the editor's border: same glyph (`─`), same
+9. The strip's separator mirrors the editor's border: same glyph (`─`), same
     `getThinkingBorderColor(level)` colour, re-derived on every render. The
     thinking level reaching the widget must come from `ctx.thinkingLevel` at
     mount and from `thinking_level_select` afterwards, never from a cached
