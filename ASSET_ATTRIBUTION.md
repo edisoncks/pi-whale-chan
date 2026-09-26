@@ -28,7 +28,8 @@ Upstream authorship, as recorded in that repository's own `ASSET_ATTRIBUTION.md`
 
 Every frame was mechanically modified for terminal display:
 
-- Downscaled so the longest edge is at most 96 px.
+- Downscaled so the longest edge is at most 96 px, then resampled to **72 px**
+  for the shipped strip (the final bullet below).
 - Cropped each state's frames to the **union** of their alpha bounding boxes, so
   frames stay aligned to one another and the animation cannot jitter. No frame is
   re-anchored individually — the poses are the artist's acting, and flattening
@@ -51,8 +52,15 @@ Every frame was mechanically modified for terminal display:
   still left each individual pose — and the dominant awake pose above all — off
   to the left. The shift is uniform across the state, so the animation cannot
   wobble.
+- Resampled 96×96 → **72×72** and reduced to a **256-colour indexed palette with
+  a `tRNS` alpha table** (ImageMagick `-colors 256`). The terminal displays a
+  frame at 8×4 cells — ≈72×72 px on a 9×18 cell — so the extra resolution was
+  being downscaled away; and the palette cuts the payload 131,442 → 33,308 B
+  (−75 %). This is the **only lossy step**: soft edges survive as ~50 alpha
+  levels, and the visible difference at display scale is ~1.7 % RMSE.
 
-No frame was redrawn, recoloured, or composited.
+No frame was redrawn or composited; the only lossy change is the palette
+quantisation above.
 
 ## Why not the upstream preview GIFs
 

@@ -160,7 +160,7 @@ export const PET_CYCLES: Readonly<Record<PetState, readonly PetFrame[]>> = {
 
 /**
  * Avatar box in terminal cells. Deliberately small: this is a status strip, not
- * a billboard. Every frame is normalised to a square 96×96 canvas, so both poses
+ * a billboard. Every frame is normalised to a square 72×72 canvas, so both poses
  * fill the same 8×4 box and their artwork lands in the same place.
  */
 export const AVATAR_MAX_COLUMNS = 8;
