@@ -94,18 +94,21 @@ function loadConfig(): { enabled: boolean; corrupt: boolean } {
 	return { enabled: true, corrupt: true };
 }
 
-function saveEnabled(enabled: boolean): boolean {
+// Returns null on success, otherwise a human-readable reason (never throws).
+// Surfacing the reason keeps a real support report diagnosable: EACCES means
+// permissions, ENOSPC means disk, ENOTDIR means the agent dir itself is wrong.
+function saveEnabled(enabled: boolean): string | null {
 	try {
 		const path = statePath();
-		if (path === null) return true;
+		if (path === null) return null;
 		// Atomic save: tmp + rename so a crash never leaves a half-file.
 		const tmp = `${path}.tmp`;
 		writeFileSync(tmp, JSON.stringify({ enabled }, null, 2));
 		renameSync(tmp, path);
-		return true;
-	} catch {
-		// Persistence must never crash the agent. Caller warns.
-		return false;
+		return null;
+	} catch (e) {
+		// Persistence must never crash the agent. Caller warns with the reason.
+		return e instanceof Error ? e.message : String(e);
 	}
 }
 
@@ -119,10 +122,10 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 		const cfg = loadConfig();
 		enabled = cfg.enabled;
 		if (cfg.corrupt) {
-			const persisted = saveEnabled(true);
 			ctx.ui.notify("[whale-chan] corrupt config reset to default (enabled)", "warning");
-			if (!persisted) {
-				ctx.ui.notify("[whale-chan] could not persist config (check agent dir permissions)", "warning");
+			const persistError = saveEnabled(true);
+			if (persistError) {
+				ctx.ui.notify(`[whale-chan] could not persist config: ${persistError}`, "warning");
 			}
 		}
 	});
@@ -208,9 +211,9 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 				return;
 			}
 
-			const persisted = saveEnabled(enabled);
-			if (!persisted) {
-				ctx.ui.notify("[whale-chan] could not persist setting (check agent dir permissions)", "warning");
+			const persistError = saveEnabled(enabled);
+			if (persistError) {
+				ctx.ui.notify(`[whale-chan] could not persist setting: ${persistError}`, "warning");
 				return;
 			}
 			ctx.ui.notify(enabled ? "whale-chan persona: on" : "whale-chan persona: off", "info");
