@@ -23,15 +23,31 @@
  *   It is a pure append, so it cannot invalidate the cached prefix. (A second,
  *   tool-result anchor was tried and removed: it showed no measurable effect —
  *   see eval/README.md.)
+ * - The avatar is display-only: a `whale_avatar` custom entry appended when the
+ *   next assistant message starts, rendered inline by an entry renderer. Custom
+ *   entries never enter the LLM context, so the avatar cannot change the prompt,
+ *   its diff, or the cache. TUI only: other modes have no entry renderers.
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getCellDimensions, Image, Text } from "@earendil-works/pi-tui";
 import { WHALE_PERSONA, WHALE_VOICE_RULE, WHALE_TAIL_ANCHOR } from "./persona.js";
 
 const SECTION_NAME = "whale_persona";
 const STATE_FILE = "whale-chan.json";
+
+const AVATAR_ENTRY_TYPE = "whale_avatar";
+const AVATAR_SIZE_PX = 200;
+const AVATAR_MIME = "image/webp";
+const AVATAR_PATH = join(dirname(fileURLToPath(import.meta.url)), "assets", "whale-chan.webp");
+
+interface WhaleAvatarData {
+	/** Target edge length in pixels. Recorded so entries stay self-describing. */
+	px: number;
+}
 
 /**
  * Mechanism switches — ablation only. Production (Pi) calls the factory with one
@@ -62,6 +78,22 @@ function statePath(): string | null {
 	} catch {
 		return null;
 	}
+}
+
+// Lazy and cached: read once per process, never in the factory (some
+// invocations load extensions without starting a session). A missing or
+// unreadable asset disables the image, never the turn — the renderer shows a
+// text badge instead.
+let avatarBase64: string | null | undefined;
+
+function loadAvatarBase64(): string | null {
+	if (avatarBase64 !== undefined) return avatarBase64;
+	try {
+		avatarBase64 = readFileSync(AVATAR_PATH).toString("base64");
+	} catch {
+		avatarBase64 = null;
+	}
+	return avatarBase64;
 }
 
 // Single parse: missing reads as on, corrupt reads as on + flags corrupt.
@@ -117,6 +149,10 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	// Fail-open default; no IO at factory time. session_start is the single
 	// source of truth for config.
 	let enabled = true;
+	// Armed by a user message, consumed by the next assistant message: one
+	// avatar per user message, not per model round. A 200px portrait is ~12
+	// rows tall; one per tool-loop round would flood the transcript.
+	let avatarPending = false;
 
 	pi.on("session_start", (_event, ctx) => {
 		const cfg = loadConfig();
@@ -128,6 +164,48 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 				ctx.ui.notify(`[whale-chan] could not persist config: ${persistError}`, "warning");
 			}
 		}
+	});
+
+	// The avatar entry must sort after the user entry and before the assistant
+	// entry. `before_agent_start` and the run's first `turn_start` both fire
+	// before the user message is persisted (agent-loop emits them before the
+	// initial message_start/message_end pair), so appending there would land the
+	// avatar *above* the user's message after a reload. By the assistant's
+	// `message_start`, the user entry is persisted and the assistant entry is
+	// not yet written (it lands at message_end): that gap is exactly one reply.
+	pi.on("message_end", (event) => {
+		if (enabled && event.message.role === "user") avatarPending = true;
+	});
+
+	pi.on("message_start", (event, ctx) => {
+		if (!avatarPending || event.message.role !== "assistant") return;
+		avatarPending = false;
+		if (!enabled || ctx.mode !== "tui") return;
+		pi.appendEntry<WhaleAvatarData>(AVATAR_ENTRY_TYPE, { px: AVATAR_SIZE_PX });
+	});
+
+	// A run can end without an assistant message (abort, or an error before the
+	// first token). Drop a pending flag so it cannot leak into a later run.
+	pi.on("agent_settled", () => {
+		avatarPending = false;
+	});
+
+	// Display-only: custom entries are not part of the LLM context (see
+	// ARCHITECTURE.md, "Why the avatar is a custom entry"). `Image` emits
+	// Kitty/iTerm2 graphics where supported and falls back to a text badge
+	// otherwise; a missing asset degrades to text, never to a failed render.
+	pi.registerEntryRenderer<WhaleAvatarData>(AVATAR_ENTRY_TYPE, (entry, _options, theme) => {
+		const base64 = loadAvatarBase64();
+		if (base64 === null) {
+			return new Text(theme.fg("muted", "[whale-chan avatar unavailable]"), 0, 0);
+		}
+		const px = entry.data?.px ?? AVATAR_SIZE_PX;
+		const cell = getCellDimensions();
+		return new Image(base64, AVATAR_MIME, { fallbackColor: (text) => theme.fg("muted", text) }, {
+			maxWidthCells: Math.max(1, Math.round(px / Math.max(1, cell.widthPx))),
+			maxHeightCells: Math.max(1, Math.round(px / Math.max(1, cell.heightPx))),
+			filename: AVATAR_PATH,
+		});
 	});
 
 	// Section patch, not prompt replacement: Pi diffs sections and appends only

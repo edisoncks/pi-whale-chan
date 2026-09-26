@@ -125,6 +125,10 @@ function makeHarness() {
 		registerCommand(name, options) {
 			commands.set(name, options);
 		},
+		// Avatar plumbing: the factory registers these, but this file never drives
+		// a message flow (and its ctx has no `mode`), so the stubs stay inert.
+		registerEntryRenderer() {},
+		appendEntry() {},
 	};
 	whaleChan(pi);
 	const ctx = { ui: { notify() {} } };

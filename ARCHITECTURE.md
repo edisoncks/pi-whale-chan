@@ -24,7 +24,7 @@ the desired sections against the ones the model already has and sends a patch
 
 | File | Responsibility |
 |---|---|
-| `index.ts` | Config load/save, `before_agent_start` section injection, tail anchor, `/whale` command |
+| `index.ts` | Config load/save, `before_agent_start` section injection, tail anchor, avatar entry + renderer, `/whale` command |
 | `persona.ts` | Frozen persona (`WHALE_PERSONA`) plus the voice rule and tail anchor (`WHALE_VOICE_RULE`, `WHALE_TAIL_ANCHOR`) |
 
 ## Design decisions
@@ -154,6 +154,45 @@ drift, i.e. the very failure the anchor exists to prevent. The binding is
 language-agnostic, so it holds for Chinese, Japanese, German, or anything else,
 rather than guessing the language by script.
 
+### Why the avatar is a custom entry
+
+Before each reply the extension appends a `whale_avatar` entry and renders it
+inline through `registerEntryRenderer`. That choice is what keeps the feature
+free:
+
+- **Display-only.** Custom entries never participate in the LLM context
+  (`pi.appendEntry` stores them for the session, not for the model).
+  `sendMessage`/`sendUserMessage` would inject the portrait into the transcript
+  the model reads — spending image tokens on every reply and opening a new
+  cache-prefix divergence. A custom entry is drawn locally only, so the prompt,
+  its diff, and the cache are untouched.
+
+- **Placement.** The entry must sort after the user entry and before the
+  assistant entry. `before_agent_start` and the run's first `turn_start` fire
+  *before* the user message is persisted (`agent-loop` emits them before its
+  initial `message_start`/`message_end` pair, and `agent-session` persists a
+  message on its `message_end`), so appending there would put the avatar above
+  the user's message after a reload. Instead a `message_end` handler arms a
+  pending flag for user messages and the assistant's `message_start` consumes
+  it: by then the user entry is persisted and the assistant entry is not yet
+  written. The session order is user → avatar → reply, on screen and after a
+  reload.
+
+- **One per user message.** The flag is one-shot, so a tool-heavy run with
+  several assistant messages gets one avatar, not one per round. A 200 px
+  portrait is roughly a dozen terminal rows; repeating it between tool results
+  would swamp the transcript. The flag is cleared on `agent_settled`, so an
+  aborted run cannot leak it into the next one.
+
+- **TUI only.** Entry renderers exist in interactive mode only, so the append
+  is guarded by `ctx.mode === "tui"`. Appending in print/JSON/RPC would leave
+  invisible entries in the session.
+
+- **Sizing.** The 200 px target is converted to cells with `getCellDimensions()`
+  (default 9×18 px; the asset is 1254×1254), so the portrait tracks the actual
+  terminal grid. The `Image` component handles the Kitty/iTerm2 protocols and
+  the text fallback; a missing asset degrades to a badge instead of a crash.
+
 ### Why the persona carries bilingual voice anchors
 
 The persona voice used to be anchored only by Chinese example lines. In English
@@ -215,6 +254,9 @@ state across restarts.
 7. The tail anchor is a pure append and never touches the system prompt:
    `WHALE_TAIL_ANCHOR` is appended only when the last message is a tool result.
    It is a frozen constant.
+8. The avatar is display-only: `whale_avatar` entries are appended with
+   `pi.appendEntry`, never with `sendMessage`/`sendUserMessage`, and the entry
+   renderer is side-effect-free.
 
 ## Recipes
 
