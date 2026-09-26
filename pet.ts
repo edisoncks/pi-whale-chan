@@ -56,7 +56,7 @@ import {
  * parameter type is assignable to a narrower one).
  */
 export interface PetTheme {
-	fg(color: "accent" | "muted" | "dim" | "text" | "success", text: string): string;
+	fg(color: "accent" | "muted" | "dim" | "text" | "success" | "warning" | "error", text: string): string;
 	bold(text: string): string;
 	/**
 	 * The separator must match the editor's border, and the editor derives that
@@ -88,6 +88,28 @@ export interface PetViewModel {
 	readonly model: string;
 	/** Drives the separator colour so it tracks the editor's border. */
 	readonly thinkingLevel: PetThinkingLevel;
+	/** Session stats for the status panel; absent before the host wires them up. */
+	readonly stats?: PetStats;
+}
+
+/**
+ * Snapshot of the session stats the status panel renders. The four-line layout
+ * mirrors pi-emote's info panel: model/level/window, context progress,
+ * token+cost totals, and the working directory.
+ */
+export interface PetStats {
+	/** Whether the model reasons; controls the thinking-level suffix. */
+	readonly reasoning: boolean;
+	readonly contextWindow: number;
+	/** Estimated context tokens, or null when unknown (e.g. post-compaction). */
+	readonly contextTokens: number | null;
+	readonly contextPercent: number | null;
+	readonly inputTokens: number;
+	readonly outputTokens: number;
+	/** Cache hit rate of the latest prompt, 0-100. */
+	readonly cacheHitRate: number;
+	readonly cost: number;
+	readonly cwd: string;
 }
 
 const ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), "assets", "whale-pet");
@@ -264,6 +286,63 @@ export function textColumn(): number {
 	return AVATAR_SLOT_COLUMNS + DIVIDER_COLUMNS;
 }
 
+/** Compact token counts: 1_000_000 → "1.0M", 12_345 → "12K", 999 → "999". */
+export function formatTokens(count: number): string {
+	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+	if (count >= 10_000) return `${Math.round(count / 1000)}K`;
+	if (count >= 1_000) return `${(count / 1000).toFixed(1)}K`;
+	return count.toString();
+}
+
+/**
+ * Progress-bar colour, by cache hit and fill. Priority mirrors pi-emote: a
+ * cold cache (0 < hit < 50%) is the alarming one, then a nearly-full context,
+ * then a healthy cache; a fresh session (no cache data yet) stays neutral.
+ */
+export function resolveProgressColor(
+	percent: number,
+	cacheHitRate: number,
+): "error" | "warning" | "success" | "text" {
+	if (cacheHitRate > 0 && cacheHitRate < 50) return "error";
+	if (percent >= 75) return "warning";
+	if (cacheHitRate >= 50) return "success";
+	return "text";
+}
+
+const EIGHTH_BLOCKS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"] as const;
+
+/**
+ * Context progress bar. Cached tokens fill a cell as `░` and fresh input as
+ * `█` (or an eighth-block for a partial cell). The minimum fill is one full
+ * cell, so a non-zero context is always visible instead of rounding to nothing.
+ */
+export function buildProgressBar(stats: PetStats): string {
+	const segments = 20;
+	const subsPerSegment = 8;
+	const totalSubs = segments * subsPerSegment;
+	const percent = stats.contextPercent ?? 0;
+	const filledSubs = percent === 0 ? 0 : Math.max(Math.ceil((percent / 100) * totalSubs), subsPerSegment);
+	const cacheSubs = Math.floor(filledSubs * (stats.cacheHitRate / 100));
+	const bar = Array.from({ length: segments }, (_, i) => {
+		const start = i * subsPerSegment;
+		const end = start + subsPerSegment;
+		const cacheInSeg = Math.max(0, Math.min(cacheSubs, end) - start);
+		const inputInSeg = Math.max(0, Math.min(filledSubs, end) - Math.max(cacheSubs, start));
+		if (cacheInSeg > 0 && inputInSeg > 0) return "█";
+		if (inputInSeg > 0) return EIGHTH_BLOCKS[inputInSeg - 1];
+		if (cacheInSeg > 0) return "░";
+		return " ";
+	}).join("");
+	const tokens = stats.contextTokens !== null ? formatTokens(stats.contextTokens) : "?";
+	return `⏵▕${bar}▏ ${tokens} (${percent.toFixed(1)}%)`;
+}
+
+/** Replace a leading home directory with `~`, like Pi's own footer. */
+function shortenHome(cwd: string): string {
+	const home = process.env.HOME || process.env.USERPROFILE;
+	return home !== undefined && home.length > 0 && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
+}
+
 export class WhalePetWidget implements Component {
 	private readonly tui: TUI;
 	private readonly theme: PetTheme;
@@ -295,7 +374,8 @@ export class WhalePetWidget implements Component {
 		const changed =
 			next.state !== this.view.state ||
 			next.model !== this.view.model ||
-			next.thinkingLevel !== this.view.thinkingLevel;
+			next.thinkingLevel !== this.view.thinkingLevel ||
+			next.stats !== this.view.stats;
 		if (next.state !== this.view.state) {
 			this.index = 0;
 			this.view = next;
@@ -332,7 +412,7 @@ export class WhalePetWidget implements Component {
 		const offset = hasAvatar
 			? Math.max(0, Math.floor((AVATAR_SLOT_COLUMNS - stateColumns(this.view.state)) / 2))
 			: 0;
-		const text = this.statusLines(width, hasAvatar);
+		const text = this.infoLines(width, hasAvatar);
 		const rows = Math.max(avatar.length, text.length);
 		// Center the two-line status block against the avatar so the strip does
 		// not look top-heavy.
@@ -408,13 +488,32 @@ export class WhalePetWidget implements Component {
 		return image;
 	}
 
-	private statusLines(width: number, hasAvatar: boolean): string[] {
-		const working = this.view.state === "working";
-		const stateColor = working ? "accent" : "muted";
-		const lines = [
-			this.theme.fg("muted", "Model: ") + this.theme.fg("text", this.view.model),
-			this.theme.fg("muted", "Status: ") + this.theme.fg(stateColor, this.view.state),
-		];
+	/**
+	 * The four-line status panel beside the avatar. Line 1 carries the model, its
+	 * thinking level, and the context window; line 2 the context progress bar;
+	 * line 3 the token/cost totals; line 4 the working directory. Without a
+	 * `stats` snapshot only the model line is drawn, so a host that has not wired
+	 * the data yet degrades to a readable strip instead of a half-empty one.
+	 */
+	private infoLines(width: number, hasAvatar: boolean): string[] {
+		const { model, thinkingLevel, stats } = this.view;
+		const thinking = this.theme.getThinkingBorderColor(thinkingLevel);
+		let modelLine = model;
+		if (stats?.reasoning) modelLine += ` • ${thinkingLevel}`;
+		if (stats) modelLine += ` • ${formatTokens(stats.contextWindow)}`;
+		const lines = [this.theme.bold(thinking(modelLine))];
+		if (stats) {
+			const barColor = resolveProgressColor(stats.contextPercent ?? 0, stats.cacheHitRate);
+			lines.push(this.theme.fg(barColor, buildProgressBar(stats)));
+			lines.push(
+				this.theme.fg(
+					"dim",
+					`↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)} ` +
+						`⇞${stats.cacheHitRate.toFixed(1)}% $${stats.cost.toFixed(3)}`,
+				),
+			);
+			lines.push(this.theme.fg("warning", shortenHome(stats.cwd)));
+		}
 		const budget = Math.max(1, width - (hasAvatar ? textColumn() : 0));
 		return lines.map((line) => truncateToWidth(line, budget));
 	}

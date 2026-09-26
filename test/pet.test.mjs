@@ -55,9 +55,12 @@ const {
 	RULE_CHAR,
 	WhalePetWidget,
 	avatarColumns,
+	buildProgressBar,
 	fitCells,
+	formatTokens,
 	framePath,
 	loadFrame,
+	resolveProgressColor,
 	stateColumns,
 	textColumn,
 } = await import("../pet.ts");
@@ -144,8 +147,25 @@ function makeTui() {
 	return { tui: { requestRender() { renders += 1; } }, renders: () => renders };
 }
 
+/**
+ * A fully-populated stats snapshot, so widget tests exercise the four-line
+ * panel without each one spelling out every field. `stats: undefined` in a
+ * view opts a case out.
+ */
+const DEFAULT_STATS = {
+	reasoning: true,
+	contextWindow: 1_000_000,
+	contextTokens: 14_000,
+	contextPercent: 1.4,
+	inputTokens: 10_000,
+	outputTokens: 4_600,
+	cacheHitRate: 99.8,
+	cost: 0.003,
+	cwd: join(process.env.HOME ?? "/home/test", "repos", "pi-emote"),
+};
+
 function makeWidget(view, tui = TUI, theme = THEME) {
-	return new WhalePetWidget(tui, theme, { thinkingLevel: "off", ...view });
+	return new WhalePetWidget(tui, theme, { thinkingLevel: "off", stats: DEFAULT_STATS, ...view });
 }
 
 /**
@@ -315,7 +335,10 @@ test("the separator reuses the editor's border glyph and colour", () => {
 		`<high>${RULE_CHAR.repeat(20)}</high>`,
 		"a full-width rule in the editor's thinking-level colour",
 	);
-	assert.deepEqual(levels, ["high"]);
+	assert.ok(
+		levels.length >= 1 && levels.every((level) => level === "high"),
+		"every border-colour lookup follows the current level",
+	);
 
 	// The editor recolours its border on every thinking-level change; the strip
 	// has to follow or the two rules visibly disagree.
@@ -338,8 +361,10 @@ test("widget composes the avatar and status side by side with cursor-forward", (
 	assert.match(graphics, /\x1b\[\d+C/, "the divider column is reached with cursor-forward, which never paints");
 	assert.ok(graphics.includes(DIVIDER_CHAR), "a vertical divider separates the avatar from the status");
 	const text = lines.join("\n");
-	assert.match(text, /Model: deepseek-v4\.1-flash/);
-	assert.match(text, /Status: idle/);
+	assert.match(text, /deepseek-v4\.1-flash/, "the model name is on the strip");
+	assert.match(text, /deepseek-v4\.1-flash • off • 1\.0M/, "model, level, and window share line 1");
+	assert.match(text, /⏵▕/, "the context progress bar is drawn");
+	assert.match(text, /⇞99\.8%/, "the cache hit rate is shown");
 });
 
 test("a state change restarts the cycle at frame 0 of the new state", () => {
@@ -356,7 +381,7 @@ test("a state change restarts the cycle at frame 0 of the new state", () => {
 	assert.ok(working0.length > 0, "the working-0 asset loads");
 	assert.ok(lines[1]?.includes(working0), "renders working-0, not a leftover idle frame");
 	assert.ok(!lines[1]?.includes(idleAwake), "the previous state's frame is gone");
-	assert.match(lines.join("\n"), /Status: working/);
+	assert.match(lines.join("\n"), /⇞/, "the stats panel survives a state change");
 });
 
 test("a state update that changes nothing does not restart the cycle", () => {
@@ -375,10 +400,10 @@ test("non-Kitty terminals get a text-only strip instead of a scrambled image", (
 	const lines = widget.render(80);
 	widget.dispose();
 
-	assert.equal(lines.length, 3, "separator plus the two status lines, no avatar rows");
+	assert.equal(lines.length, AVATAR_MAX_ROWS + 1, "separator plus the four info lines, no avatar rows");
 	assert.doesNotMatch(lines.join("\n"), /\x1b_G/, "no graphics escape is emitted");
-	assert.match(lines.join("\n"), /Model: m/);
-	assert.match(lines.join("\n"), /Status: idle/);
+	assert.match(lines.join("\n"), /m • off • 1\.0M/, "the model line is the fallback");
+	assert.match(lines.join("\n"), /⏵▕/, "the text-only strip still shows the stats panel");
 });
 
 test("a long model label is clipped to the strip width, not wrapped", () => {
@@ -399,6 +424,49 @@ test("a disposed widget goes inert", () => {
 	const before = renders();
 	widget.update({ state: "working" });
 	assert.equal(renders(), before, "a disposed widget never asks for another render");
+});
+
+test("formatTokens compacts large counts", () => {
+	assert.equal(formatTokens(999), "999");
+	assert.equal(formatTokens(1_000), "1.0K");
+	assert.equal(formatTokens(12_345), "12K");
+	assert.equal(formatTokens(1_000_000), "1.0M");
+});
+
+test("the context bar is empty at zero and filled past the minimum", () => {
+	const empty = buildProgressBar({ ...DEFAULT_STATS, contextPercent: 0, contextTokens: null });
+	assert.match(empty, /^⏵▕ {20}▏ \? \(0\.0%\)$/, "an empty context draws an empty bar");
+	const half = buildProgressBar({ ...DEFAULT_STATS, contextPercent: 50, cacheHitRate: 0 });
+	assert.match(half, /█/, "a half-full context shows blocks");
+	assert.match(half, /50\.0%/);
+});
+
+test("progress colour prioritises a cold cache, then a nearly-full context", () => {
+	assert.equal(resolveProgressColor(10, 20), "error", "a cold cache is the alarm");
+	assert.equal(resolveProgressColor(80, 90), "warning", "a nearly-full context outranks cache");
+	assert.equal(resolveProgressColor(10, 90), "success", "a healthy cache is good news");
+	assert.equal(resolveProgressColor(10, 0), "text", "a fresh session stays neutral");
+});
+
+test("the info panel renders the four stat lines", () => {
+	kitty();
+	const widget = makeWidget({ state: "idle", model: "deepseek-v4.1-flash" });
+	const text = widget.render(80).join("\n");
+	widget.dispose();
+	assert.match(text, /deepseek-v4\.1-flash • off • 1\.0M/, "model, level, and window");
+	assert.match(text, /⏵▕/, "a progress bar");
+	assert.match(text, /↑10K ↓4\.6K ⇞99\.8% \$0\.003/, "token and cost totals");
+	assert.match(text, /~\/repos\/pi-emote/, "the cwd, home-abbreviated");
+});
+
+test("without stats only the model line is drawn", () => {
+	kitty();
+	const widget = makeWidget({ state: "idle", model: "m", stats: undefined });
+	const lines = widget.render(80);
+	widget.dispose();
+	assert.equal(lines.length, AVATAR_MAX_ROWS + 1, "the avatar still reserves its rows");
+	assert.match(lines.join("\n"), /m/);
+	assert.doesNotMatch(lines.join("\n"), /⏵▕/, "no bar without stats");
 });
 
 // --- extension wiring -------------------------------------------------------
@@ -457,14 +525,20 @@ test("the strip mounts on session_start and follows the agent lifecycle", async 
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	const widget = mount(widgets);
-	assert.match(widget.render(80).join("\n"), /Status: idle/);
-	assert.match(widget.render(80).join("\n"), /Model: M/);
+	assert.match(widget.render(80).join("\n"), /M/, "the model name is on the strip");
+	assert.match(widget.render(80).join("\n"), /⏵▕/, "the stats panel is drawn");
 
 	await handlers.get("agent_start")({ type: "agent_start" }, ctx);
-	assert.match(widget.render(80).join("\n"), /Status: working/, "a run puts the pet to work");
+	assert.ok(
+		(widget.render(80)[1] ?? "").includes((loadFrame("working-0") ?? "").slice(0, 512)),
+		"a run puts the pet to work",
+	);
 
 	await handlers.get("agent_settled")({ type: "agent_settled" }, ctx);
-	assert.match(widget.render(80).join("\n"), /Status: idle/, "settling puts the pet back to rest");
+	assert.ok(
+		(widget.render(80)[1] ?? "").includes((loadFrame("idle-awake") ?? "").slice(0, 512)),
+		"settling puts the pet back to rest",
+	);
 
 	await handlers.get("session_shutdown")({ type: "session_shutdown" }, ctx);
 	widget.dispose();

@@ -49,11 +49,13 @@ running, and vice versa.
   inline-image support (Kitty, iTerm2). Terminals without image support show a
   compact text badge instead. The avatar is display-only: it never enters the
   model context or your token usage.
-- Above the editor, a **pet strip**: whale-chan animates beside the current model
-  and status (`idle` / `working`). She hugs her pillow and dozes off while idle,
-  and types on a laptop while a turn is running. The strip is framed in the input
+- Above the editor, a **pet strip**: whale-chan animates beside a four-line
+  status panel — model • thinking level • context window, a context progress
+  bar, cumulative input/output tokens with cache-hit rate and cost, and the
+  working directory. She hugs her pillow and dozes off while idle, and types on a
+  laptop while a turn is running. The strip is framed in the input
   box's own border colour — which follows the thinking level — with a rule across
-  the top and a divider between the avatar and the status, so it reads as part of
+  the top and a divider between the avatar and the panel, so it reads as part of
   the editor rather than a floating banner. It needs a terminal that speaks the
   Kitty graphics protocol (Kitty,
   Ghostty, WezTerm, Rio, Warp); anywhere else

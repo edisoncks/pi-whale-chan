@@ -229,7 +229,7 @@ each one is a trap that a naive `HStack(Image, Text)` walks straight into:
 - **The image reports zero visible width.** `Image.render()` returns the Kitty
 escape sequence on one line and blank lines for the rest; a stripped escape
 sequence measures zero cells. `HStack` therefore believes the avatar is zero
-columns wide and would draw the status text *on top of* the artwork. The strip
+columns wide and would draw the panel text *on top of* the artwork. The strip
 computes the avatar's cell box itself (`fitCells`, mirroring pi-tui's unexported
 `calculateImageCellSize`) and reserves the column by hand.
 - **Reserving the column with spaces would repaint the artwork.** Printing N
@@ -249,7 +249,7 @@ level from `thinking_level_select`. A colour captured at mount time would drift
 and leave the two rules visibly disagreeing.
 - **A vertical divider closes the framing, and every frame is centred behind it.**
 A `│` in the same border colour sits at `AVATAR_SLOT_COLUMNS`, separating the
-avatar from the status text. Frames are *centred* inside that slot, and the slot
+avatar from the panel text. Frames are *centred* inside that slot, and the slot
 is exactly the frame box — it adds no padding of its own, so the pose sits flush
 against the divider and only the artwork's own transparent margin separates the
 two. This was originally a source-asset bug rather than a layout one: the idle
@@ -265,6 +265,16 @@ cells the frame does not cover; every other row reaches the divider with
 cursor-forward. Everything left of the text comes from one function,
 `textColumn()`, so the rendered indent and the truncation budget cannot drift
 apart.
+**Why the status panel looks the way it does.** The four lines beside the
+avatar — model • thinking level • context window, a context progress bar,
+cumulative input/output tokens with cache-hit rate and cost, and the working
+directory — mirror the info panel in
+[pi-emote](https://github.com/cgxeiji/pi-emote). `index.ts` builds one snapshot
+(`petStats`) from `ctx` and refreshes it on `agent_start`, every `message_end`,
+`agent_settled`, and on `thinking_level_select`/`model_select`, so the numbers
+track the session while the widget stays a pure function of its view model. A
+missing snapshot is not an error: the panel falls back to the model line alone,
+which is what the text-only path renders.
 
 **Why the frame timer lives in the component.** `setExtensionWidget` calls the
 factory once and keeps the returned component, and it calls `dispose()` when the

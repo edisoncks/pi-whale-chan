@@ -44,7 +44,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, getCellDimensions, Image, Text } from "@earendil-works/pi-tui";
 import { WHALE_PERSONA, WHALE_VOICE_RULE, WHALE_TAIL_ANCHOR } from "./persona.js";
-import { WhalePetWidget } from "./pet.js";
+import { WhalePetWidget, type PetStats } from "./pet.js";
 
 const SECTION_NAME = "whale_persona";
 const STATE_FILE = "whale-chan.json";
@@ -187,6 +187,63 @@ function modelLabel(model: ExtensionContext["model"]): string {
 	return model?.name ?? model?.id ?? "unknown";
 }
 
+/**
+ * The slice of `ExtensionContext` the pet panel reads. Every stats source is
+ * optional, so a stub runtime that only exposes `ui`/`model` still mounts the
+ * strip — it simply renders the model line.
+ */
+type PetContext = {
+	ui: ExtensionUIContext;
+	model: ExtensionContext["model"];
+	thinkingLevel?: ExtensionContext["thinkingLevel"];
+	getContextUsage?: ExtensionContext["getContextUsage"];
+	sessionManager?: ExtensionContext["sessionManager"];
+	cwd?: string;
+};
+
+/**
+ * Snapshot the session stats the strip renders. Best-effort: the session walk
+ * is wrapped so a runtime without a session manager degrades to zeros instead
+ * of throwing mid-render.
+ */
+function petStats(ctx: PetContext): PetStats {
+	const usage = ctx.getContextUsage?.();
+	const model = ctx.model;
+	let inputTokens = 0;
+	let outputTokens = 0;
+	let cost = 0;
+	let latestInput = 0;
+	let latestCacheRead = 0;
+	let latestCacheWrite = 0;
+	try {
+		for (const entry of ctx.sessionManager?.getEntries() ?? []) {
+			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+			const messageUsage = entry.message.usage;
+			if (!messageUsage) continue;
+			inputTokens += messageUsage.input ?? 0;
+			outputTokens += messageUsage.output ?? 0;
+			cost += messageUsage.cost?.total ?? 0;
+			latestInput = messageUsage.input ?? 0;
+			latestCacheRead = messageUsage.cacheRead ?? 0;
+			latestCacheWrite = messageUsage.cacheWrite ?? 0;
+		}
+	} catch {
+		// Session history is best-effort; the panel falls back to zeros.
+	}
+	const promptTokens = latestInput + latestCacheRead + latestCacheWrite;
+	return {
+		reasoning: model?.reasoning === true,
+		contextWindow: usage?.contextWindow ?? model?.contextWindow ?? 0,
+		contextTokens: usage?.tokens ?? null,
+		contextPercent: usage?.percent ?? null,
+		inputTokens,
+		outputTokens,
+		cacheHitRate: promptTokens > 0 ? (latestCacheRead / promptTokens) * 100 : 0,
+		cost,
+		cwd: ctx.cwd ?? process.cwd(),
+	};
+}
+
 export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms = {}) {
 	const M = { ...ALL_MECHANISMS, ...mechanisms };
 	// Fail-open defaults; no IO at factory time. session_start is the single
@@ -202,19 +259,14 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	// never touches the prompt. `setWidget` with a factory is the documented path
 	// for persistent content near the editor, and its default placement is
 	// `aboveEditor` — exactly the status strip we want.
-	const mountPet = (ctx: {
-		ui: ExtensionUIContext;
-		model: ExtensionContext["model"];
-		// Optional, matching ExtensionContext: a runtime that never exposes a
-		// thinking level still mounts the strip (it just uses the default colour).
-		thinkingLevel?: ExtensionContext["thinkingLevel"];
-	}): void => {
+	const mountPet = (ctx: PetContext): void => {
 		if (petWidget !== null) return;
 		ctx.ui.setWidget(PET_WIDGET_KEY, (tui, theme) => {
 			const widget = new WhalePetWidget(tui, theme, {
 				state: "idle",
 				model: modelLabel(ctx.model),
 				thinkingLevel: ctx.thinkingLevel ?? "off",
+				stats: petStats(ctx),
 			});
 			petWidget = widget;
 			return widget;
@@ -254,22 +306,35 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 			state: "working",
 			model: modelLabel(ctx.model),
 			thinkingLevel: ctx.thinkingLevel ?? "off",
+			stats: petStats(ctx),
 		});
+	});
+
+	// Context usage and token totals move with every assistant message, so the
+	// panel is refreshed as they land rather than only at the turn boundary.
+	pi.on("message_end", (_event, ctx) => {
+		petWidget?.update({ stats: petStats(ctx) });
 	});
 
 	pi.on("agent_end", () => {
 		petWidget?.update({ state: "idle" });
 	});
 
-	pi.on("agent_settled", () => {
-		petWidget?.update({ state: "idle" });
+	pi.on("agent_settled", (_event, ctx) => {
+		petWidget?.update({ state: "idle", stats: petStats(ctx) });
 	});
 
 	// The strip's separator copies the editor's border colour, and the editor
 	// recolours that border on every thinking-level change. Without this the
 	// strip would keep the old colour and the two rules would visibly disagree.
-	pi.on("thinking_level_select", (event) => {
-		petWidget?.update({ thinkingLevel: event.level });
+	pi.on("thinking_level_select", (event, ctx) => {
+		petWidget?.update({ thinkingLevel: event.level, stats: petStats(ctx) });
+	});
+
+	// A mid-session model switch changes the model name and its capability set;
+	// the panel follows it even before the next run starts.
+	pi.on("model_select", (_event, ctx) => {
+		petWidget?.update({ model: modelLabel(ctx.model), stats: petStats(ctx) });
 	});
 
 	pi.on("session_shutdown", () => {
