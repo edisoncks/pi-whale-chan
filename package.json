@@ -33,7 +33,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit --skipLibCheck",
-    "test": "node --test test/",
+    "test": "node --test",
     "eval": "node eval/run.ts",
     "eval:probe": "node eval/probe.ts"
   },
