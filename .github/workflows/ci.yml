@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      # Credential-free checks only. eval/run.ts and eval/probe.ts create real
+      # sessions and need provider credentials, so they stay out of CI; the
+      # --replay path makes no model calls and is exercised by the unit tests.
+      - run: npm run typecheck
+      - run: npm test

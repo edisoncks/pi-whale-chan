@@ -5,14 +5,14 @@ through long, tool-heavy turns — the failure mode the extension exists to fix.
 The unit tests prove the *mechanism* (the anchors get injected); this proves the
 *effect* (the model's behavior changes).
 
-## LOCAL ONLY — do not wire into CI
+## Sessions are LOCAL ONLY — do not wire into CI
 
 Everything that creates a session calls a real model and needs provider
 credentials from the agent dir's `auth.json`. CI has none of that. The rules:
 
 - `npm test` (unit tests + [`test/scorer.test.mjs`](../test/scorer.test.mjs))
-  stays credential-free and is the only thing CI should run. `npm run typecheck`
-  covers `eval/**/*.ts` too and needs no credentials.
+  and `npm run typecheck` (which also covers `eval/**/*.ts`) are credential-free
+  and are what CI runs — see [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 - `eval/run.ts` and `eval/probe.ts` are **local, manual** tools.
 - The one CI-safe piece here is `--replay`: it re-scores a stored `run.json`
   with the pure scorer and makes **zero** model calls.
