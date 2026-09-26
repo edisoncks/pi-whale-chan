@@ -176,10 +176,10 @@ test("renderer falls back to a text badge without image support", () => {
 
 	const entry = { type: "custom", customType: AVATAR_TYPE, data: { px: 200 } };
 	const component = renderers.get(AVATAR_TYPE)(entry, { expanded: false }, THEME);
-	const text = component.render(200).join("\n");
+	const [badge] = component.render(200);
 
-	assert.ok(text.startsWith("[Image: "), "fallback is an image badge");
-	assert.match(text, /image\/png/, "fallback names the mime type");
+	assert.match(badge, /^ \[Image: /, "badge carries the transcript's one-column inset");
+	assert.match(badge, /image\/png/, "fallback names the mime type");
 });
 
 test("renderer emits Kitty PNG graphics where supported", () => {
@@ -190,7 +190,7 @@ test("renderer emits Kitty PNG graphics where supported", () => {
 	const component = renderers.get(AVATAR_TYPE)(entry, { expanded: false }, THEME);
 	const lines = component.render(80);
 
-	assert.match(lines[0], /^\x1b_G/, "the first line carries the kitty graphics sequence");
+	assert.match(lines[0], /^ \x1b_G/, "the image carries the transcript's one-column inset");
 	assert.match(lines[0], /f=100/, "the payload is declared as PNG (the only kitty transfer format)");
 	assert.ok(lines[0].includes("iVBORw0KGgo"), "the payload starts with the PNG signature");
 	assert.ok(lines.length > 1, "the image reserves multiple terminal rows");

@@ -33,7 +33,7 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getCellDimensions, Image, Text } from "@earendil-works/pi-tui";
+import { Box, getCellDimensions, Image, Text } from "@earendil-works/pi-tui";
 import { WHALE_PERSONA, WHALE_VOICE_RULE, WHALE_TAIL_ANCHOR } from "./persona.js";
 
 const SECTION_NAME = "whale_persona";
@@ -200,16 +200,24 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	// otherwise; a missing asset degrades to text, never to a failed render.
 	pi.registerEntryRenderer<WhaleAvatarData>(AVATAR_ENTRY_TYPE, (entry, _options, theme) => {
 		const base64 = loadAvatarBase64();
-		if (base64 === null) {
-			return new Text(theme.fg("muted", "[whale-chan avatar unavailable]"), 0, 0);
-		}
 		const px = entry.data?.px ?? AVATAR_SIZE_PX;
-		const cell = getCellDimensions();
-		return new Image(base64, AVATAR_MIME, { fallbackColor: (text) => theme.fg("muted", text) }, {
-			maxWidthCells: Math.max(1, Math.round(px / Math.max(1, cell.widthPx))),
-			maxHeightCells: Math.max(1, Math.round(px / Math.max(1, cell.heightPx))),
-			filename: AVATAR_PATH,
-		});
+		let avatar: Image | Text;
+		if (base64 === null) {
+			avatar = new Text(theme.fg("muted", "[whale-chan avatar unavailable]"), 0, 0);
+		} else {
+			const cell = getCellDimensions();
+			avatar = new Image(base64, AVATAR_MIME, { fallbackColor: (text) => theme.fg("muted", text) }, {
+				maxWidthCells: Math.max(1, Math.round(px / Math.max(1, cell.widthPx))),
+				maxHeightCells: Math.max(1, Math.round(px / Math.max(1, cell.heightPx))),
+				filename: AVATAR_PATH,
+			});
+		}
+		// Custom entries render flush left, while transcript prose carries Pi's
+		// one-column output inset (outputPad, default 1). Box supplies the same
+		// inset so the portrait lines up with the surrounding text.
+		const box = new Box(1, 0);
+		box.addChild(avatar);
+		return box;
 	});
 
 	// Section patch, not prompt replacement: Pi diffs sections and appends only

@@ -195,9 +195,11 @@ free:
   only (`f=100`), so a webp payload rendered as blank rows there, and the
   smaller source also keeps each inline re-transmission cheap while staying
   above the ~200 px display size. `assets/whale-chan.webp` (1254×1254) stays
-  as the high-res README original. The `Image` component handles the
-  Kitty/iTerm2 protocols and the text fallback; a missing asset degrades to a
-  badge instead of a crash.
+  as the high-res README original. The entry renders inside a `Box(1, 0)` so
+  the portrait carries the same one-column inset as transcript prose
+  (`outputPad`, default 1); custom entries otherwise render flush left. The
+  `Image` component handles the Kitty/iTerm2 protocols and the text fallback;
+  a missing asset degrades to a badge instead of a crash.
 
 ### Why the persona carries bilingual voice anchors
 
