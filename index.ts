@@ -27,17 +27,29 @@
  *   each assistant message, rendered inline by an entry renderer. Custom
  *   entries never enter the LLM context, so the avatar cannot change the prompt,
  *   its diff, or the cache. TUI only: other modes have no entry renderers.
+ * - The pet strip is display-only in the same way: it is an extension widget
+ *   above the editor, driven by agent lifecycle events, and it never calls
+ *   `sendMessage`/`appendEntry`. It has its own `/whale pet` switch because it
+ *   is a display preference rather than part of the persona.
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+	getAgentDir,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type ExtensionUIContext,
+} from "@earendil-works/pi-coding-agent";
 import { Box, getCellDimensions, Image, Text } from "@earendil-works/pi-tui";
 import { WHALE_PERSONA, WHALE_VOICE_RULE, WHALE_TAIL_ANCHOR } from "./persona.js";
+import { WhalePetWidget } from "./pet.js";
 
 const SECTION_NAME = "whale_persona";
 const STATE_FILE = "whale-chan.json";
+/** Widget key for the animated pet strip above the editor. */
+const PET_WIDGET_KEY = "whale_pet";
 
 const AVATAR_ENTRY_TYPE = "whale_avatar";
 const AVATAR_SIZE_PX = 200;
@@ -102,46 +114,66 @@ function loadAvatarBase64(): string | null {
 	return avatarBase64;
 }
 
-// Single parse: missing reads as on, corrupt reads as on + flags corrupt.
+/** Persisted preferences. `pet` is independent of `enabled` on purpose. */
+export interface WhaleConfig {
+	/** Whether the persona is injected into the system prompt. */
+	enabled: boolean;
+	/** Whether the animated pet strip is shown above the editor. */
+	pet: boolean;
+}
+
+const DEFAULT_CONFIG: WhaleConfig = { enabled: true, pet: true };
+
+// Single parse: absent keys read as their defaults, bad values flag corrupt.
 // Pure read: never writes, warns, or notifies. Why no existsSync: stat-then-read
-// is TOCTOU; try the read directly. ENOENT means "no config yet" (default on),
+// is TOCTOU; try the read directly. ENOENT means "no config yet" (defaults),
 // parse/shape failure means corrupt. Other IO errors fail open silently.
-function loadConfig(): { enabled: boolean; corrupt: boolean } {
+function loadConfig(): { config: WhaleConfig; corrupt: boolean } {
 	const path = statePath();
-	if (path === null) return { enabled: true, corrupt: false };
+	if (path === null) return { config: { ...DEFAULT_CONFIG }, corrupt: false };
 	let text: string;
 	try {
 		text = readFileSync(path, "utf8");
 	} catch {
-		return { enabled: true, corrupt: false };
+		return { config: { ...DEFAULT_CONFIG }, corrupt: false };
 	}
 	let raw: unknown;
 	try {
 		raw = JSON.parse(text);
 	} catch {
-		return { enabled: true, corrupt: true };
+		return { config: { ...DEFAULT_CONFIG }, corrupt: true };
 	}
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-		return { enabled: true, corrupt: true };
+		return { config: { ...DEFAULT_CONFIG }, corrupt: true };
 	}
-	{
-		const enabled = (raw as { enabled?: unknown }).enabled;
-		if (enabled === undefined) return { enabled: true, corrupt: false };
-		if (typeof enabled === "boolean") return { enabled, corrupt: false };
+	const record = raw as { enabled?: unknown; pet?: unknown };
+	// Each key is validated independently, so one bad value cannot discard a good
+	// sibling. An absent key is not corruption: it is a first run, or a config
+	// written before that key existed.
+	let corrupt = false;
+	let enabled = DEFAULT_CONFIG.enabled;
+	let pet = DEFAULT_CONFIG.pet;
+	if (record.enabled !== undefined) {
+		if (typeof record.enabled === "boolean") enabled = record.enabled;
+		else corrupt = true;
 	}
-	return { enabled: true, corrupt: true };
+	if (record.pet !== undefined) {
+		if (typeof record.pet === "boolean") pet = record.pet;
+		else corrupt = true;
+	}
+	return { config: { enabled, pet }, corrupt };
 }
 
 // Returns null on success, otherwise a human-readable reason (never throws).
 // Surfacing the reason keeps a real support report diagnosable: EACCES means
 // permissions, ENOSPC means disk, ENOTDIR means the agent dir itself is wrong.
-function saveEnabled(enabled: boolean): string | null {
+function saveConfig(config: WhaleConfig): string | null {
 	try {
 		const path = statePath();
 		if (path === null) return null;
 		// Atomic save: tmp + rename so a crash never leaves a half-file.
 		const tmp = `${path}.tmp`;
-		writeFileSync(tmp, JSON.stringify({ enabled }, null, 2));
+		writeFileSync(tmp, JSON.stringify(config, null, 2));
 		renameSync(tmp, path);
 		return null;
 	} catch (e) {
@@ -150,22 +182,99 @@ function saveEnabled(enabled: boolean): string | null {
 	}
 }
 
+/** Label for the pet strip; falls back so a missing name never blanks the line. */
+function modelLabel(model: ExtensionContext["model"]): string {
+	return model?.name ?? model?.id ?? "unknown";
+}
+
 export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms = {}) {
 	const M = { ...ALL_MECHANISMS, ...mechanisms };
-	// Fail-open default; no IO at factory time. session_start is the single
+	// Fail-open defaults; no IO at factory time. session_start is the single
 	// source of truth for config.
 	let enabled = true;
+	let petEnabled = true;
+	// Assigned by the widget factory Pi invokes from `setWidget`; null while the
+	// strip is unmounted. That factory runs once per mount, so this stays the
+	// single live instance the lifecycle handlers poke.
+	let petWidget: WhalePetWidget | null = null;
+
+	// The pet is UI-only: it renders in Pi's widget container above the editor and
+	// never touches the prompt. `setWidget` with a factory is the documented path
+	// for persistent content near the editor, and its default placement is
+	// `aboveEditor` — exactly the status strip we want.
+	const mountPet = (ctx: {
+		ui: ExtensionUIContext;
+		model: ExtensionContext["model"];
+		// Optional, matching ExtensionContext: a runtime that never exposes a
+		// thinking level still mounts the strip (it just uses the default colour).
+		thinkingLevel?: ExtensionContext["thinkingLevel"];
+	}): void => {
+		if (petWidget !== null) return;
+		ctx.ui.setWidget(PET_WIDGET_KEY, (tui, theme) => {
+			const widget = new WhalePetWidget(tui, theme, {
+				state: "idle",
+				model: modelLabel(ctx.model),
+				thinkingLevel: ctx.thinkingLevel ?? "off",
+			});
+			petWidget = widget;
+			return widget;
+		});
+	};
+
+	// Pi disposes the component itself when a widget is replaced or cleared; we
+	// dispose first only so the frame timer is cancelled before the swap.
+	const unmountPet = (ctx: { ui: ExtensionUIContext }): void => {
+		petWidget?.dispose();
+		petWidget = null;
+		ctx.ui.setWidget(PET_WIDGET_KEY, undefined);
+	};
 
 	pi.on("session_start", (_event, ctx) => {
-		const cfg = loadConfig();
-		enabled = cfg.enabled;
-		if (cfg.corrupt) {
-			ctx.ui.notify("[whale-chan] corrupt config reset to default (enabled)", "warning");
-			const persistError = saveEnabled(true);
+		const { config, corrupt } = loadConfig();
+		enabled = config.enabled;
+		petEnabled = config.pet;
+		if (corrupt) {
+			ctx.ui.notify("[whale-chan] corrupt config reset to defaults", "warning");
+			const persistError = saveConfig(config);
 			if (persistError) {
 				ctx.ui.notify(`[whale-chan] could not persist config: ${persistError}`, "warning");
 			}
 		}
+		if (petEnabled && ctx.mode === "tui") {
+			mountPet(ctx);
+		}
+	});
+
+	// Busy window for the pet. `agent_start` fires once per run and `agent_settled`
+	// once after retries resolve, so the strip stays "working" for a whole
+	// tool-heavy turn instead of flickering between turns. The model label is
+	// refreshed here so a mid-session model switch is reflected.
+	pi.on("agent_start", (_event, ctx) => {
+		petWidget?.update({
+			state: "working",
+			model: modelLabel(ctx.model),
+			thinkingLevel: ctx.thinkingLevel ?? "off",
+		});
+	});
+
+	pi.on("agent_end", () => {
+		petWidget?.update({ state: "idle" });
+	});
+
+	pi.on("agent_settled", () => {
+		petWidget?.update({ state: "idle" });
+	});
+
+	// The strip's separator copies the editor's border colour, and the editor
+	// recolours that border on every thinking-level change. Without this the
+	// strip would keep the old colour and the two rules would visibly disagree.
+	pi.on("thinking_level_select", (event) => {
+		petWidget?.update({ thinkingLevel: event.level });
+	});
+
+	pi.on("session_shutdown", () => {
+		petWidget?.dispose();
+		petWidget = null;
 	});
 
 	// Every assistant message is a reply, and a tool-heavy run emits several
@@ -265,16 +374,37 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	});
 
 	pi.registerCommand("whale", {
-		description: "Toggle the DeepSeek whale-chan persona in the system prompt",
+		description: "Toggle the DeepSeek whale-chan persona and the animated pet strip",
 		getArgumentCompletions: (prefix: string) => {
-			const options = ["on", "off", "toggle", "status"];
+			const options = ["on", "off", "toggle", "status", "pet on", "pet off", "pet toggle"];
 			return options.filter((o) => o.startsWith(prefix)).map((value) => ({ value, label: value }));
 		},
 		handler: async (args, ctx) => {
 			const arg = (args || "").trim().toLowerCase();
 
 			if (arg === "status") {
-				ctx.ui.notify(enabled ? "whale-chan persona: on" : "whale-chan persona: off", "info");
+				ctx.ui.notify(
+					`whale-chan persona: ${enabled ? "on" : "off"} · pet: ${petEnabled ? "on" : "off"}`,
+					"info",
+				);
+				return;
+			}
+
+			// The pet has its own switch: it is a display preference, not part of the
+			// persona, so turning the persona off must not hide the pet.
+			if (arg === "pet" || arg === "pet on" || arg === "pet off" || arg === "pet toggle") {
+				petEnabled = arg === "pet on" ? true : arg === "pet off" ? false : !petEnabled;
+				const petPersistError = saveConfig({ enabled, pet: petEnabled });
+				if (petPersistError) {
+					ctx.ui.notify(`[whale-chan] could not persist setting: ${petPersistError}`, "warning");
+					return;
+				}
+				if (petEnabled && ctx.mode === "tui") {
+					mountPet(ctx);
+				} else {
+					unmountPet(ctx);
+				}
+				ctx.ui.notify(`whale-chan pet: ${petEnabled ? "on" : "off"}`, "info");
 				return;
 			}
 
@@ -285,11 +415,11 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 			} else if (arg === "off") {
 				enabled = false;
 			} else {
-				ctx.ui.notify("Usage: /whale [on|off|toggle|status]", "warning");
+				ctx.ui.notify("Usage: /whale [on|off|toggle|status|pet on|pet off]", "warning");
 				return;
 			}
 
-			const persistError = saveEnabled(enabled);
+			const persistError = saveConfig({ enabled, pet: petEnabled });
 			if (persistError) {
 				ctx.ui.notify(`[whale-chan] could not persist setting: ${persistError}`, "warning");
 				return;

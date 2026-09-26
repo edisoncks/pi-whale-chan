@@ -24,8 +24,9 @@ the desired sections against the ones the model already has and sends a patch
 
 | File | Responsibility |
 |---|---|
-| `index.ts` | Config load/save, `before_agent_start` section injection, tail anchor, avatar entry + renderer, `/whale` command |
+| `index.ts` | Config load/save, `before_agent_start` section injection, tail anchor, avatar entry + renderer, pet strip lifecycle, `/whale` command |
 | `persona.ts` | Frozen persona (`WHALE_PERSONA`) plus the voice rule and tail anchor (`WHALE_VOICE_RULE`, `WHALE_TAIL_ANCHOR`) |
+| `pet.ts` | Frame tables and `WhalePetWidget` — the animated strip above the editor |
 
 ## Design decisions
 
@@ -218,6 +219,79 @@ free:
   disables the avatar instead of the whole extension would be the alternative,
   at the cost of an async import in the factory.
 
+### Why the pet strip is hand-composed
+
+`ctx.ui.setWidget()` is the documented path for persistent content near the
+editor and its default placement is already `aboveEditor`, so the strip needs no
+layout negotiation. Three pi-tui properties decide the rendering strategy, and
+each one is a trap that a naive `HStack(Image, Text)` walks straight into:
+
+- **The image reports zero visible width.** `Image.render()` returns the Kitty
+escape sequence on one line and blank lines for the rest; a stripped escape
+sequence measures zero cells. `HStack` therefore believes the avatar is zero
+columns wide and would draw the status text *on top of* the artwork. The strip
+computes the avatar's cell box itself (`fitCells`, mirroring pi-tui's unexported
+`calculateImageCellSize`) and reserves the column by hand.
+- **Reserving the column with spaces would repaint the artwork.** Printing N
+spaces to advance the cursor also paints N cells, and the image's anchor row sits
+exactly there. The strip uses CSI cursor-forward (`ESC[nC`) instead, which moves
+the cursor without painting anything.
+- **iTerm2 anchors its inline images on the last row.** pi-tui emits
+`moveUp + sequence` there, so the image would be painted over text already
+written on the preceding rows. Rather than ship a scrambled strip, the widget
+renders a text-only status line unless `getCapabilities().images === "kitty"`.
+- **The strip must read as part of the input box, not as a floating banner.**
+A separator is drawn above it using the editor's own glyph (`─`) and its
+thinking-level colour. pi-tui's editor paints `"─".repeat(width)` with
+`borderColor`, and Pi recolours that border on *every* thinking-level change, so
+the widget re-derives the colour on each render and `index.ts` feeds it the new
+level from `thinking_level_select`. A colour captured at mount time would drift
+and leave the two rules visibly disagreeing.
+- **A vertical divider closes the framing, and every frame is centred behind it.**
+A `│` in the same border colour sits at `AVATAR_SLOT_COLUMNS`, separating the
+avatar from the status text. Frames are *centred* inside that slot, and the slot
+is two columns wider than the frame box so the pose keeps a blank column on each
+side. This was originally a source-asset bug rather than a layout one: the idle
+artwork came off a 77×96 canvas and the working artwork off a 96×93 one, so
+`fitCells` handed them 7 and 8 columns. The same left anchor plus different
+widths means different midpoints, and no column arithmetic can hide a whole
+column of difference — centring only moved the problem around. The fix landed
+upstream of the maths: every frame is normalised to a square 96×96 canvas, so
+both poses occupy the same 8×4 box. The per-state centring stays anyway, so a
+future non-square asset degrades to a centred pose instead of a shelf-shifted
+one. The centring spaces are printed *before* the image escape, so they occupy
+cells the frame does not cover; every other row reaches the divider with
+cursor-forward. Everything left of the text comes from one function,
+`textColumn()`, so the rendered indent and the truncation budget cannot drift
+apart.
+
+**Why the frame timer lives in the component.** `setExtensionWidget` calls the
+factory once and keeps the returned component, and it calls `dispose()` when the
+widget is replaced or cleared. A component-owned timer is therefore the only
+place a frame loop can live. The timer is `unref()`'d so a pending frame can
+never keep Pi from exiting.
+
+**Why frames are pre-extracted PNGs.** Pi's terminal layer transmits PNG
+(`f=100`) and has no payload type for GIF or WebP, so a GIF decoder would add a
+runtime dependency and still need a conversion step. Frames ship as 96 px RGBA
+PNGs under `assets/whale-pet/`, each carrying a 6 px transparent inset so the
+artwork does not touch its cell edges (the canvas size is unchanged, because the
+widget's column maths keys off it). `test/pet.test.mjs` binds them: it pins the
+upstream frame order and timing, checks every asset exists and keeps its alpha
+channel, and asserts the text column is reserved with cursor-forward.
+
+**Why every frame shares one Kitty image id.** pi-tui's `imageId` option is
+documented for animations: reusing the id makes the terminal *replace* the placed
+image instead of accumulating one placement per frame.
+
+**Why the pet has its own switch.** The persona is a prompt and style concern;
+the strip is a display preference. Coupling them would mean you could not keep
+the voice while dropping the animation (or the reverse), so `whale-chan.json`
+carries an independent `pet` key, `/whale pet [on|off|toggle]` drives it live,
+and the strip mounts regardless of whether the persona is on. Frame data is
+copied from the upstream source rather than fetched at runtime, so the strip
+works offline and never adds a network call to startup.
+
 ### Why the persona carries bilingual voice anchors
 
 The persona voice used to be anchored only by Chinese example lines. In English
@@ -282,6 +356,24 @@ state across restarts.
 8. The avatar is display-only: `whale_avatar` entries are appended with
    `pi.appendEntry`, never with `sendMessage`/`sendUserMessage`, and the entry
    renderer is side-effect-free.
+9. The pet strip is display-only: it is mounted with `ctx.ui.setWidget`, updated
+   only by lifecycle events, and never calls `sendMessage`/`appendEntry`. Its
+   frame timer is `unref()`'d and cleared in `dispose()`. Frame data is copied
+   from the upstream source; the strip performs no IO beyond reading its own
+   committed assets.
+10. The strip's separator mirrors the editor's border: same glyph (`─`), same
+    `getThinkingBorderColor(level)` colour, re-derived on every render. The
+    thinking level reaching the widget must come from `ctx.thinkingLevel` at
+    mount and from `thinking_level_select` afterwards, never from a cached
+    value.
+
+### Add a pet state
+
+Drop the frames in `assets/whale-pet/`, extend `PET_CYCLES` in `pet.ts`, mirror
+the frame order and timing in `test/pet.test.mjs` (that test is the contract that
+the table has not drifted from its source), then map the state to a lifecycle
+event in `index.ts`. Keep the frames at most 96 px on the longest edge and
+RGBA — the test asserts both.
 
 ## Recipes
 

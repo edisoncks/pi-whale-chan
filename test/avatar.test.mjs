@@ -73,8 +73,21 @@ function makeHarness(mode = "tui") {
 		},
 	};
 	whaleChan(pi);
-	const ctx = { mode, ui: { notify() {} } };
-	return { handlers, commands, renderers, entries, ctx };
+	// The pet strip mounts through `ctx.ui.setWidget`; record mounts so tests can
+	// assert on the widget lifecycle as well as on the avatar entries.
+	const widgets = new Map();
+	const ctx = {
+		mode,
+		model: { id: "test-model", name: "Test Model" },
+		ui: {
+			notify() {},
+			setWidget(key, content) {
+				if (content === undefined) widgets.delete(key);
+				else widgets.set(key, content);
+			},
+		},
+	};
+	return { handlers, commands, renderers, entries, widgets, ctx };
 }
 
 async function start(handlers, ctx) {
