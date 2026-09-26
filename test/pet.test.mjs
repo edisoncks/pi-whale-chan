@@ -8,7 +8,8 @@
  * - the idle cycle mirrors `dsh-whale-pet`'s `preview` sequence and per-frame
  *   delays (irregular holds are the acting, not noise),
  * - the working cycle is the upstream ping-pong at a uniform 220 ms,
- * - every referenced asset exists as an RGBA PNG small enough for the strip,
+ * - every referenced asset exists as an alpha-bearing PNG small enough for the
+ *   strip (truecolour+alpha or indexed+`tRNS`),
  * - the separator reuses the editor's own border glyph and thinking-level colour,
  *   so the strip and the input box read as one frame,
  * - the text column is reserved with cursor-forward, never with spaces (spaces
@@ -66,8 +67,22 @@ const {
 } = await import("../pet.ts");
 const { resetCapabilitiesCache, setCapabilities } = await import("@earendil-works/pi-tui");
 
+/** Chunk type codes present in a PNG, in file order. */
+function pngChunkTypes(png) {
+	const types = [];
+	for (let offset = 8; offset < png.length; ) {
+		const length = png.readUInt32BE(offset);
+		const type = png.toString("ascii", offset + 4, offset + 8);
+		types.push(type);
+		if (type === "IEND") break;
+		offset += 12 + length;
+	}
+	return types;
+}
+
 /**
- * Alpha bounding box of an 8-bit RGBA, non-interlaced PNG.
+ * Alpha bounding box of an 8-bit, non-interlaced PNG: either truecolour+alpha
+ * (colour type 6) or indexed with a `tRNS` alpha table (colour type 3).
  *
  * Centring is an *asset* property: the widget centres whatever the PNG header
  * says, so a frame whose artwork sits off to one side renders off to one side.
@@ -77,33 +92,46 @@ const { resetCapabilitiesCache, setCapabilities } = await import("@earendil-work
 function alphaBounds(png) {
 	const width = png.readUInt32BE(16);
 	const height = png.readUInt32BE(20);
+	const colorType = png.readUInt8(25);
 	assert.equal(png.readUInt8(24), 8, "8-bit channels");
-	assert.equal(png.readUInt8(25), 6, "truecolour with alpha");
+	assert.ok(colorType === 6 || colorType === 3, "truecolour+alpha or indexed");
 	assert.equal(png.readUInt8(28), 0, "not interlaced");
 
+	// Indexed frames carry alpha in a per-palette-entry `tRNS` table; truecolour
+	// frames carry it in the fourth channel of every pixel. `bytesPerPixel` is
+	// what filter reconstruction needs, not the display channel count.
+	const bytesPerPixel = colorType === 6 ? 4 : 1;
 	const parts = [];
+	let transparency = null;
 	for (let offset = 8; offset < png.length; ) {
 		const length = png.readUInt32BE(offset);
 		const type = png.toString("ascii", offset + 4, offset + 8);
-		if (type === "IDAT") parts.push(png.subarray(offset + 8, offset + 8 + length));
+		const body = png.subarray(offset + 8, offset + 8 + length);
+		if (type === "IDAT") parts.push(body);
+		else if (type === "tRNS") transparency = body;
 		if (type === "IEND") break;
 		offset += 12 + length;
 	}
 	const raw = inflateSync(Buffer.concat(parts));
+	const alphaAt = (row, x) => {
+		if (colorType === 6) return row[x * 4 + 3];
+		const index = row[x];
+		return transparency === null || index >= transparency.length ? 0xff : transparency[index];
+	};
 
-	const stride = width * 4;
+	const stride = width * bytesPerPixel;
 	const previous = Buffer.alloc(stride);
 	const current = Buffer.alloc(stride);
-	const bounds = { minX: width, maxX: -1, minY: height, maxY: -1 };
+	const bounds = { minX: width, maxX: -1, minY: height, maxY: -1, width, height };
 	let cursor = 0;
 	for (let y = 0; y < height; y++) {
 		const filter = raw[cursor];
 		cursor += 1;
 		for (let i = 0; i < stride; i++) {
 			const value = raw[cursor + i];
-			const left = i >= 4 ? current[i - 4] : 0;
+			const left = i >= bytesPerPixel ? current[i - bytesPerPixel] : 0;
 			const up = previous[i];
-			const upLeft = i >= 4 ? previous[i - 4] : 0;
+			const upLeft = i >= bytesPerPixel ? previous[i - bytesPerPixel] : 0;
 			let restored;
 			if (filter === 0) restored = value;
 			else if (filter === 1) restored = (value + left) & 0xff;
@@ -120,7 +148,7 @@ function alphaBounds(png) {
 			current[i] = restored;
 		}
 		for (let x = 0; x < width; x++) {
-			if (current[x * 4 + 3] > 16) {
+			if (alphaAt(current, x) > 16) {
 				if (x < bounds.minX) bounds.minX = x;
 				if (x > bounds.maxX) bounds.maxX = x;
 				if (y < bounds.minY) bounds.minY = y;
@@ -214,7 +242,7 @@ test("working cycle is the upstream ping-pong at a uniform pace", () => {
 	);
 });
 
-test("every referenced frame is an RGBA PNG inside the avatar box", () => {
+test("every referenced frame is an alpha-bearing PNG inside the avatar box", () => {
 	const seen = new Set();
 	for (const cycle of Object.values(PET_CYCLES)) {
 		for (const { asset } of cycle) {
@@ -223,13 +251,20 @@ test("every referenced frame is an RGBA PNG inside the avatar box", () => {
 			const path = framePath(asset);
 			assert.ok(existsSync(path), `${asset}.png ships with the extension`);
 			const png = readFileSync(path);
-			assert.equal(png.readUInt8(25), 6, `${asset} keeps an alpha channel (no baked-in background)`);
+			const colorType = png.readUInt8(25);
+			const types = pngChunkTypes(png);
+			// Truecolour+alpha, or an indexed palette carrying a `tRNS` alpha table.
+			// Either way the frame has to keep transparency or it bakes in a background.
+			assert.ok(
+				colorType === 6 || (colorType === 3 && types.includes("tRNS")),
+				`${asset} keeps an alpha channel (no baked-in background)`,
+			);
 			const width = png.readUInt32BE(16);
 			const height = png.readUInt32BE(20);
 			// A uniform canvas is what keeps every pose in the same cell box, so the
 			// two states cannot end up centred a column apart.
-			assert.equal(width, 96, `${asset} sits on the normalised 96px canvas`);
-			assert.equal(height, 96, `${asset} sits on the normalised 96px canvas`);
+			assert.equal(width, 72, `${asset} sits on the normalised 72px canvas`);
+			assert.equal(height, 72, `${asset} sits on the normalised 72px canvas`);
 		}
 	}
 	assert.equal(seen.size, 12, "twelve distinct frames back the two cycles");
@@ -240,7 +275,7 @@ test("every frame's artwork is horizontally centred in its canvas", () => {
 		for (const { asset } of cycle) {
 			const bounds = alphaBounds(readFileSync(framePath(asset)));
 			const left = bounds.minX;
-			const right = 95 - bounds.maxX;
+			const right = bounds.width - 1 - bounds.maxX;
 			// The tolerance absorbs pose variation (the sleep pose slumps); the bug
 			// this pins left a 5px gap, and the widget can only centre the canvas.
 			assert.ok(

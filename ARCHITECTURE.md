@@ -193,7 +193,7 @@ artwork came off a 77×96 canvas and the working artwork off a 96×93 one, so
 `fitCells` handed them 7 and 8 columns. The same left anchor plus different
 widths means different midpoints, and no column arithmetic can hide a whole
 column of difference — centring only moved the problem around. The fix landed
-upstream of the maths: every frame is normalised to a square 96×96 canvas, so
+upstream of the maths: every frame is normalised to a square 72×72 canvas, so
 both poses occupy the same 8×4 box. The per-state centring stays anyway, so a
 future non-square asset degrades to a centred pose instead of a shelf-shifted
 one. The centring spaces are printed *before* the image escape, so they occupy
@@ -220,10 +220,14 @@ never keep Pi from exiting.
 
 **Why frames are pre-extracted PNGs.** Pi's terminal layer transmits PNG
 (`f=100`) and has no payload type for GIF or WebP, so a GIF decoder would add a
-runtime dependency and still need a conversion step. Frames ship as 96 px RGBA
-PNGs under `assets/whale-pet/`, each carrying a 6 px transparent inset so the
-artwork does not touch its cell edges (the canvas size is unchanged, because the
-widget's column maths keys off it). `test/pet.test.mjs` binds them: it pins the
+runtime dependency and still need a conversion step. Frames ship as 72 px
+indexed PNGs (a 256-colour palette plus a `tRNS` alpha table) under
+`assets/whale-pet/`, each carrying a transparent inset so the artwork does not
+touch its cell edges (the canvas size is unchanged, because the widget's column
+maths keys off it). At 72 px square the source matches the 8×4 box exactly on a
+9×18 cell — pi-tui's fallback size — so a terminal that reports *larger* cells
+scales the frame up and trades a little sharpness for the payload cut.
+`test/pet.test.mjs` binds them: it pins the
 upstream frame order and timing, checks every asset exists and keeps its alpha
 channel, and asserts the text column is reserved with cursor-forward.
 
@@ -316,8 +320,8 @@ state across restarts.
 Drop the frames in `assets/whale-pet/`, extend `PET_CYCLES` in `pet.ts`, mirror
 the frame order and timing in `test/pet.test.mjs` (that test is the contract that
 the table has not drifted from its source), then map the state to a lifecycle
-event in `index.ts`. Keep the frames at most 96 px on the longest edge and
-RGBA — the test asserts both.
+event in `index.ts`. Keep the frames at most 72 px on the longest edge and
+alpha-bearing (truecolour+alpha or indexed+`tRNS`) — the test asserts both.
 
 ## Recipes
 
