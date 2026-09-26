@@ -168,7 +168,9 @@ test("renderer emits Kitty PNG graphics where supported", () => {
 	assert.match(lines[0], /^ \x1b_G/, "the image carries the transcript's one-column inset");
 	assert.match(lines[0], /f=100/, "the payload is declared as PNG (the format Image transmits)");
 	assert.ok(lines[0].includes("iVBORw0KGgo"), "the payload starts with the PNG signature");
-	assert.ok(lines.length > 1, "the image reserves multiple terminal rows");
+	// Pins the row count ARCHITECTURE.md documents for the 200px avatar at the
+	// default 9x18 cell size: round(200/18) = 11 rows for the square asset.
+	assert.equal(lines.length, 11, "the avatar reserves 11 terminal rows at the default cell size");
 });
 
 after(() => {
