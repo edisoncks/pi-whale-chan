@@ -163,45 +163,100 @@ type PetContext = {
 	cwd?: string;
 };
 
+type SessionManager = NonNullable<PetContext["sessionManager"]>;
+type SessionEntry = ReturnType<SessionManager["getEntries"]>[number];
+
+interface UsageTotals {
+	inputTokens: number;
+	outputTokens: number;
+	cost: number;
+	latestInput: number;
+	latestCacheRead: number;
+	latestCacheWrite: number;
+}
+
+function emptyUsage(): UsageTotals {
+	return { inputTokens: 0, outputTokens: 0, cost: 0, latestInput: 0, latestCacheRead: 0, latestCacheWrite: 0 };
+}
+
 /**
- * Snapshot the session stats the strip renders. Best-effort: the session walk
- * is wrapped so a runtime without a session manager degrades to zeros instead
- * of throwing mid-render.
+ * Running assistant-usage totals, folded incrementally out of the session's
+ * entries. Pi's session is append-only ("entries cannot be modified or
+ * deleted"), so a session that only grew since the last call resumes from
+ * `consumed` instead of re-walking every entry — walking everything on every
+ * event was O(n²) over a long session.
  */
-function petStats(ctx: PetContext): PetStats {
+export interface UsageAccumulator {
+	manager: unknown;
+	consumed: number;
+	anchor: SessionEntry | undefined;
+	totals: UsageTotals;
+}
+
+export function createUsageAccumulator(): UsageAccumulator {
+	return { manager: undefined, consumed: 0, anchor: undefined, totals: emptyUsage() };
+}
+
+/**
+ * Fold the session's assistant usage into `acc` and return the running totals.
+ * The `anchor` identity check keeps the resume honest: a different manager, a
+ * shrink, or a replaced entry list forces a rebuild, so a session switch can
+ * never inherit stale totals. History is best-effort: a manager that throws
+ * degrades to whatever has already been accumulated.
+ */
+export function accumulateUsage(acc: UsageAccumulator, manager: SessionManager | undefined): UsageTotals {
+	let entries: readonly SessionEntry[];
+	try {
+		entries = manager?.getEntries() ?? [];
+	} catch {
+		return acc.totals;
+	}
+	const resumable =
+		acc.manager === manager &&
+		acc.consumed <= entries.length &&
+		(acc.consumed === 0 || entries[acc.consumed - 1] === acc.anchor);
+	if (!resumable) {
+		acc.consumed = 0;
+		acc.anchor = undefined;
+		acc.totals = emptyUsage();
+	}
+	for (let i = acc.consumed; i < entries.length; i++) {
+		const entry = entries[i];
+		if (entry === undefined || entry.type !== "message" || entry.message.role !== "assistant") continue;
+		const messageUsage = entry.message.usage;
+		if (!messageUsage) continue;
+		acc.totals.inputTokens += messageUsage.input ?? 0;
+		acc.totals.outputTokens += messageUsage.output ?? 0;
+		acc.totals.cost += messageUsage.cost?.total ?? 0;
+		acc.totals.latestInput = messageUsage.input ?? 0;
+		acc.totals.latestCacheRead = messageUsage.cacheRead ?? 0;
+		acc.totals.latestCacheWrite = messageUsage.cacheWrite ?? 0;
+	}
+	acc.manager = manager;
+	acc.consumed = entries.length;
+	acc.anchor = entries[entries.length - 1];
+	return acc.totals;
+}
+
+/**
+ * Snapshot the session stats the strip renders. Best-effort: the accumulation
+ * and `getContextUsage` are defensive, so a stub runtime degrades to zeros or
+ * the model line instead of throwing mid-render.
+ */
+function petStats(ctx: PetContext, acc: UsageAccumulator): PetStats {
 	const usage = ctx.getContextUsage?.();
 	const model = ctx.model;
-	let inputTokens = 0;
-	let outputTokens = 0;
-	let cost = 0;
-	let latestInput = 0;
-	let latestCacheRead = 0;
-	let latestCacheWrite = 0;
-	try {
-		for (const entry of ctx.sessionManager?.getEntries() ?? []) {
-			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-			const messageUsage = entry.message.usage;
-			if (!messageUsage) continue;
-			inputTokens += messageUsage.input ?? 0;
-			outputTokens += messageUsage.output ?? 0;
-			cost += messageUsage.cost?.total ?? 0;
-			latestInput = messageUsage.input ?? 0;
-			latestCacheRead = messageUsage.cacheRead ?? 0;
-			latestCacheWrite = messageUsage.cacheWrite ?? 0;
-		}
-	} catch {
-		// Session history is best-effort; the panel falls back to zeros.
-	}
-	const promptTokens = latestInput + latestCacheRead + latestCacheWrite;
+	const totals = accumulateUsage(acc, ctx.sessionManager);
+	const promptTokens = totals.latestInput + totals.latestCacheRead + totals.latestCacheWrite;
 	return {
 		reasoning: model?.reasoning === true,
 		contextWindow: usage?.contextWindow ?? model?.contextWindow ?? 0,
 		contextTokens: usage?.tokens ?? null,
 		contextPercent: usage?.percent ?? null,
-		inputTokens,
-		outputTokens,
-		cacheHitRate: promptTokens > 0 ? (latestCacheRead / promptTokens) * 100 : 0,
-		cost,
+		inputTokens: totals.inputTokens,
+		outputTokens: totals.outputTokens,
+		cacheHitRate: promptTokens > 0 ? (totals.latestCacheRead / promptTokens) * 100 : 0,
+		cost: totals.cost,
 		cwd: ctx.cwd ?? process.cwd(),
 	};
 }
@@ -216,19 +271,31 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	// strip is unmounted. That factory runs once per mount, so this stays the
 	// single live instance the lifecycle handlers poke.
 	let petWidget: WhalePetWidget | null = null;
+	// Incremental token/cost fold for the status panel. One per extension
+	// instance; the accumulator rebuilds itself when the session changes.
+	const usageAcc = createUsageAccumulator();
 
 	// The pet is UI-only: it renders in Pi's widget container above the editor and
 	// never touches the prompt. `setWidget` with a factory is the documented path
 	// for persistent content near the editor, and its default placement is
 	// `aboveEditor` — exactly the status strip we want.
 	const mountPet = (ctx: PetContext): void => {
-		if (petWidget !== null) return;
+		if (petWidget !== null) {
+			// A second session_start without a shutdown should re-point the live
+			// strip at the new context instead of leaving it bound to the old one.
+			petWidget.update({
+				model: modelLabel(ctx.model),
+				thinkingLevel: ctx.thinkingLevel ?? "off",
+				stats: petStats(ctx, usageAcc),
+			});
+			return;
+		}
 		ctx.ui.setWidget(PET_WIDGET_KEY, (tui, theme) => {
 			const widget = new WhalePetWidget(tui, theme, {
 				state: "idle",
 				model: modelLabel(ctx.model),
 				thinkingLevel: ctx.thinkingLevel ?? "off",
-				stats: petStats(ctx),
+				stats: petStats(ctx, usageAcc),
 			});
 			petWidget = widget;
 			return widget;
@@ -248,7 +315,7 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 		enabled = config.enabled;
 		petEnabled = config.pet;
 		if (corrupt) {
-			ctx.ui.notify("[whale-chan] corrupt config reset to defaults", "warning");
+			ctx.ui.notify("[whale-chan] corrupt config: invalid values reset to defaults", "warning");
 			const persistError = saveConfig(config);
 			if (persistError) {
 				ctx.ui.notify(`[whale-chan] could not persist config: ${persistError}`, "warning");
@@ -268,14 +335,14 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 			state: "working",
 			model: modelLabel(ctx.model),
 			thinkingLevel: ctx.thinkingLevel ?? "off",
-			stats: petStats(ctx),
+			stats: petStats(ctx, usageAcc),
 		});
 	});
 
 	// Context usage and token totals move with every assistant message, so the
 	// panel is refreshed as they land rather than only at the turn boundary.
 	pi.on("message_end", (_event, ctx) => {
-		petWidget?.update({ stats: petStats(ctx) });
+		petWidget?.update({ stats: petStats(ctx, usageAcc) });
 	});
 
 	pi.on("agent_end", () => {
@@ -283,20 +350,20 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	});
 
 	pi.on("agent_settled", (_event, ctx) => {
-		petWidget?.update({ state: "idle", stats: petStats(ctx) });
+		petWidget?.update({ state: "idle", stats: petStats(ctx, usageAcc) });
 	});
 
 	// The strip's separator copies the editor's border colour, and the editor
 	// recolours that border on every thinking-level change. Without this the
 	// strip would keep the old colour and the two rules would visibly disagree.
 	pi.on("thinking_level_select", (event, ctx) => {
-		petWidget?.update({ thinkingLevel: event.level, stats: petStats(ctx) });
+		petWidget?.update({ thinkingLevel: event.level, stats: petStats(ctx, usageAcc) });
 	});
 
 	// A mid-session model switch changes the model name and its capability set;
 	// the panel follows it even before the next run starts.
 	pi.on("model_select", (_event, ctx) => {
-		petWidget?.update({ model: modelLabel(ctx.model), stats: petStats(ctx) });
+		petWidget?.update({ model: modelLabel(ctx.model), stats: petStats(ctx, usageAcc) });
 	});
 
 	pi.on("session_shutdown", () => {

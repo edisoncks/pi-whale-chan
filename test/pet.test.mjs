@@ -54,7 +54,7 @@ const {
 	PET_CYCLES,
 	RULE_CHAR,
 	WhalePetWidget,
-	avatarColumns,
+	avatarInset,
 	buildProgressBar,
 	fitCells,
 	formatTokens,
@@ -258,14 +258,26 @@ test("fitCells keeps a frame inside the strip box", () => {
 	assert.deepEqual(fitCells(77, 96, 9, 18), { columns: 7, rows: 4 });
 });
 
-test("the reserved text column is two slots past the widest frame", () => {
-	assert.equal(avatarColumns(), AVATAR_MAX_COLUMNS);
+test("the reserved text column is the slot plus the divider", () => {
 	assert.equal(
 		AVATAR_SLOT_COLUMNS,
 		AVATAR_MAX_COLUMNS,
 		"the slot is the frame box, with no extra padding",
 	);
 	assert.equal(textColumn(), AVATAR_SLOT_COLUMNS + 2, "divider + one blank column");
+});
+
+test("a narrower frame is centred inside the fixed slot", () => {
+	assert.equal(avatarInset(AVATAR_SLOT_COLUMNS), 0, "a full-width frame needs no inset");
+	assert.equal(avatarInset(AVATAR_SLOT_COLUMNS - 2), 1, "a two-column-narrower frame insets by one");
+	assert.equal(avatarInset(AVATAR_SLOT_COLUMNS - 1), 0, "an odd gap keeps the left edge");
+	// The inset plus the cursor-forward that follows it must still land on the
+	// slot column, and the frame must never reach across the divider.
+	for (let columns = 1; columns <= AVATAR_SLOT_COLUMNS; columns++) {
+		const inset = avatarInset(columns);
+		assert.equal(inset + (AVATAR_SLOT_COLUMNS - inset), AVATAR_SLOT_COLUMNS, `columns=${columns}: divider column`);
+		assert.ok(inset + columns <= AVATAR_SLOT_COLUMNS, `columns=${columns}: frame stays short of the divider`);
+	}
 });
 
 test("both poses sit flush to the slot with no centring inset", () => {
@@ -430,6 +442,9 @@ test("formatTokens compacts large counts", () => {
 	assert.equal(formatTokens(999), "999");
 	assert.equal(formatTokens(1_000), "1.0K");
 	assert.equal(formatTokens(12_345), "12K");
+	assert.equal(formatTokens(999_499), "999K");
+	assert.equal(formatTokens(999_500), "1.0M", "a rounded 1000K promotes to the M unit");
+	assert.equal(formatTokens(999_999), "1.0M");
 	assert.equal(formatTokens(1_000_000), "1.0M");
 });
 
@@ -477,7 +492,7 @@ test("without stats only the model line is drawn", () => {
 // so sandbox persistence exactly like the other test files do.
 const sandbox = mkdtempSync(join(tmpdir(), "whale-pet-test-"));
 process.env.PI_CODING_AGENT_DIR = sandbox;
-const { default: whaleChan } = await import("../index.ts");
+const { default: whaleChan, createUsageAccumulator, accumulateUsage } = await import("../index.ts");
 const STATE_PATH = join(sandbox, "whale-chan.json");
 
 function makeExtensionHarness() {
@@ -604,6 +619,47 @@ test("a disabled pet preference never mounts the strip", async () => {
 	await commands.get("whale").handler("pet off", ctx);
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 	assert.ok(!widgets.has("whale_pet"), "the persisted preference is honoured on the next session");
+});
+
+test("usage totals accumulate incrementally and rebuild on a session change", () => {
+	const assistant = (input, output, cost, cacheRead = 0, cacheWrite = 0) => ({
+		type: "message",
+		message: { role: "assistant", usage: { input, output, cost: { total: cost }, cacheRead, cacheWrite } },
+	});
+	const user = { type: "message", message: { role: "user" } };
+
+	let entries = [assistant(100, 20, 0.001, 50, 10), user, assistant(200, 40, 0.002, 150, 20)];
+	const manager = { getEntries: () => entries };
+	const acc = createUsageAccumulator();
+
+	let totals = accumulateUsage(acc, manager);
+	assert.equal(totals.inputTokens, 300, "the first call folds the whole session");
+	assert.equal(totals.outputTokens, 60);
+	assert.equal(totals.cost, 0.003);
+	assert.equal(totals.latestCacheRead, 150, "latest reflects the newest assistant message");
+
+	// No growth: the running total must not be folded twice.
+	totals = accumulateUsage(acc, manager);
+	assert.equal(totals.inputTokens, 300, "an unchanged session is not re-folded");
+	assert.equal(acc.consumed, 3, "consumed tracks the entry count");
+
+	// Growth resumes from the tail, not from the start.
+	entries = [...entries, assistant(400, 80, 0.004, 300, 40)];
+	totals = accumulateUsage(acc, manager);
+	assert.equal(totals.inputTokens, 700, "only the appended entry is added");
+	assert.equal(totals.outputTokens, 140);
+	assert.equal(totals.cost, 0.007);
+	assert.equal(totals.latestCacheRead, 300);
+
+	// A different manager (a session switch) must rebuild, never inherit.
+	const other = { getEntries: () => [assistant(7, 8, 0.009, 0, 0)] };
+	totals = accumulateUsage(acc, other);
+	assert.equal(totals.inputTokens, 7, "a session switch does not inherit stale totals");
+	assert.equal(totals.outputTokens, 8);
+
+	// A shrink on a fresh manager also rebuilds rather than resuming past the end.
+	const shrunk = { getEntries: () => [assistant(1, 2, 0)] };
+	assert.equal(accumulateUsage(acc, shrunk).inputTokens, 1, "a shrink rebuilds from scratch");
 });
 
 after(() => {

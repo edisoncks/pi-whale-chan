@@ -222,38 +222,22 @@ export function fitCells(
 	};
 }
 
-let cachedAvatarColumns: number | undefined;
-
-/**
- * Widest column count across every frame of every state, so the text column
- * does not shift when the pet switches from idle to working. Computed once.
- */
-export function avatarColumns(): number {
-	if (cachedAvatarColumns !== undefined) return cachedAvatarColumns;
-	const cell = getCellDimensions();
-	let columns = 1;
-	const seen = new Set<string>();
-	for (const cycle of Object.values(PET_CYCLES)) {
-		for (const frame of cycle) {
-			if (seen.has(frame.asset)) continue;
-			seen.add(frame.asset);
-			const data = loadFrame(frame.asset);
-			if (data === null) continue;
-			const dims = getPngDimensions(data);
-			if (dims === null) continue;
-			columns = Math.max(columns, fitCells(dims.widthPx, dims.heightPx, cell.widthPx, cell.heightPx).columns);
-		}
-	}
-	cachedAvatarColumns = columns;
-	return columns;
-}
-
 /**
  * Columns reserved for the avatar. Equal to the frame box: the slot adds no
  * padding of its own, so the strip stays tight to the artwork. The frame keeps
  * whatever transparent margin its own PNG carries; the layout adds none.
  */
 export const AVATAR_SLOT_COLUMNS = AVATAR_MAX_COLUMNS;
+
+/**
+ * Columns of centring inset placed before a frame of `columns` cells inside the
+ * fixed slot. Every shipped frame is normalised to the full slot width, so this
+ * is zero in practice; a narrower future pose degrades to a centred one instead
+ * of a left-shifted one.
+ */
+export function avatarInset(columns: number): number {
+	return Math.max(0, Math.floor((AVATAR_SLOT_COLUMNS - columns) / 2));
+}
 
 const stateColumnCache = new Map<PetState, number>();
 
@@ -288,7 +272,9 @@ export function textColumn(): number {
 
 /** Compact token counts: 1_000_000 → "1.0M", 12_345 → "12K", 999 → "999". */
 export function formatTokens(count: number): string {
-	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+	// 999_500 rounds to 1000K at integer precision, so promote to the M unit
+	// instead of printing "1000K".
+	if (count >= 999_500) return `${(count / 1_000_000).toFixed(1)}M`;
 	if (count >= 10_000) return `${Math.round(count / 1000)}K`;
 	if (count >= 1_000) return `${(count / 1000).toFixed(1)}K`;
 	return count.toString();
@@ -297,7 +283,9 @@ export function formatTokens(count: number): string {
 /**
  * Progress-bar colour, by cache hit and fill. Priority mirrors pi-emote: a
  * cold cache (0 < hit < 50%) is the alarming one, then a nearly-full context,
- * then a healthy cache; a fresh session (no cache data yet) stays neutral.
+ * then a healthy cache. A hit rate of exactly 0 is treated as "no cache data
+ * yet" and stays neutral, matching pi-emote — a genuine 0% is indistinguishable
+ * from an empty session here.
  */
 export function resolveProgressColor(
 	percent: number,
@@ -395,6 +383,10 @@ export class WhalePetWidget implements Component {
 
 	invalidate(): void {
 		for (const image of this.images.values()) image.invalidate();
+		// `stateColumns` is derived from the terminal's cell dimensions, which a
+		// resize can change. Drop it so the next render reserves columns against
+		// the current cell size instead of the pre-resize one.
+		stateColumnCache.clear();
 	}
 
 	render(width: number): string[] {
@@ -409,12 +401,10 @@ export class WhalePetWidget implements Component {
 		// Centre the frame inside a fixed slot. Frames are normalised to a square
 		// canvas so every pose occupies the same number of columns, and the
 		// centring keeps the gap to the divider symmetric and state-independent.
-		const offset = hasAvatar
-			? Math.max(0, Math.floor((AVATAR_SLOT_COLUMNS - stateColumns(this.view.state)) / 2))
-			: 0;
+		const offset = hasAvatar ? avatarInset(stateColumns(this.view.state)) : 0;
 		const text = this.infoLines(width, hasAvatar);
 		const rows = Math.max(avatar.length, text.length);
-		// Center the two-line status block against the avatar so the strip does
+		// Center the four-line status block against the avatar so the strip does
 		// not look top-heavy.
 		const top = Math.max(0, Math.floor((rows - text.length) / 2));
 		// The separator comes first, so the strip reads as a panel that the
