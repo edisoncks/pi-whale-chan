@@ -224,7 +224,10 @@ runtime dependency and still need a conversion step. Frames ship as 72 px
 indexed PNGs (a 256-colour palette plus a `tRNS` alpha table) under
 `assets/whale-pet/`, each carrying a transparent inset so the artwork does not
 touch its cell edges (the canvas size is unchanged, because the widget's column
-maths keys off it). `test/pet.test.mjs` binds them: it pins the
+maths keys off it). At 72 px square the source matches the 8×4 box exactly on a
+9×18 cell — pi-tui's fallback size — so a terminal that reports *larger* cells
+scales the frame up and trades a little sharpness for the payload cut.
+`test/pet.test.mjs` binds them: it pins the
 upstream frame order and timing, checks every asset exists and keeps its alpha
 channel, and asserts the text column is reserved with cursor-forward.
 

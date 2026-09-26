@@ -8,7 +8,8 @@
  * - the idle cycle mirrors `dsh-whale-pet`'s `preview` sequence and per-frame
  *   delays (irregular holds are the acting, not noise),
  * - the working cycle is the upstream ping-pong at a uniform 220 ms,
- * - every referenced asset exists as an RGBA PNG small enough for the strip,
+ * - every referenced asset exists as an alpha-bearing PNG small enough for the
+ *   strip (truecolour+alpha or indexed+`tRNS`),
  * - the separator reuses the editor's own border glyph and thinking-level colour,
  *   so the strip and the input box read as one frame,
  * - the text column is reserved with cursor-forward, never with spaces (spaces
