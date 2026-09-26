@@ -227,11 +227,11 @@ export function avatarColumns(): number {
 }
 
 /**
- * Columns reserved for the avatar: two wider than the frame box, so the pose
- * keeps one blank column on each side instead of sitting flush against the
- * slot's edge.
+ * Columns reserved for the avatar. Equal to the frame box: the slot adds no
+ * padding of its own, so the strip stays tight to the artwork. The frame keeps
+ * whatever transparent margin its own PNG carries; the layout adds none.
  */
-export const AVATAR_SLOT_COLUMNS = AVATAR_MAX_COLUMNS + 2;
+export const AVATAR_SLOT_COLUMNS = AVATAR_MAX_COLUMNS;
 
 const stateColumnCache = new Map<PetState, number>();
 

@@ -250,8 +250,9 @@ and leave the two rules visibly disagreeing.
 - **A vertical divider closes the framing, and every frame is centred behind it.**
 A `│` in the same border colour sits at `AVATAR_SLOT_COLUMNS`, separating the
 avatar from the status text. Frames are *centred* inside that slot, and the slot
-is two columns wider than the frame box so the pose keeps a blank column on each
-side. This was originally a source-asset bug rather than a layout one: the idle
+is exactly the frame box — it adds no padding of its own, so the pose sits flush
+against the divider and only the artwork's own transparent margin separates the
+two. This was originally a source-asset bug rather than a layout one: the idle
 artwork came off a 77×96 canvas and the working artwork off a 96×93 one, so
 `fitCells` handed them 7 and 8 columns. The same left anchor plus different
 widths means different midpoints, and no column arithmetic can hide a whole

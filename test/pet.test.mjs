@@ -242,13 +242,13 @@ test("the reserved text column is two slots past the widest frame", () => {
 	assert.equal(avatarColumns(), AVATAR_MAX_COLUMNS);
 	assert.equal(
 		AVATAR_SLOT_COLUMNS,
-		AVATAR_MAX_COLUMNS + 2,
-		"a blank column on each side of the widest pose",
+		AVATAR_MAX_COLUMNS,
+		"the slot is the frame box, with no extra padding",
 	);
 	assert.equal(textColumn(), AVATAR_SLOT_COLUMNS + 2, "divider + one blank column");
 });
 
-test("both poses are inset one column inside the slot", () => {
+test("both poses sit flush to the slot with no centring inset", () => {
 	kitty();
 	assert.equal(stateColumns("idle"), 8, "the normalised canvas fills the frame box");
 	assert.equal(stateColumns("working"), 8, "and so does the other pose");
@@ -260,8 +260,8 @@ test("both poses are inset one column inside the slot", () => {
 	const workingRow = working.render(40)[1];
 	working.dispose();
 
-	assert.equal(/^ */.exec(idleRow)[0].length, 1, "idle sits one column in");
-	assert.equal(/^ */.exec(workingRow)[0].length, 1, "the widest pose sits one column in too");
+	assert.equal(/^ */.exec(idleRow)[0].length, 0, "idle starts at the slot edge");
+	assert.equal(/^ */.exec(workingRow)[0].length, 0, "the widest pose starts at the slot edge too");
 });
 
 test("the vertical divider is a straight line across the whole strip", () => {
