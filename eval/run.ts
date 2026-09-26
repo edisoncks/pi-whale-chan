@@ -68,6 +68,7 @@ function parseArgs(argv: string[]) {
 		}
 		else if (a === "--thinking") out.thinking = next() as typeof out.thinking;
 		else if (a === "--replay") out.replay = next();
+		else throw new Error(`unknown argument: ${a}`);
 	}
 	return out;
 }
