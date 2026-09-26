@@ -20,7 +20,9 @@
     "index.ts",
     "persona.ts",
     "README.md",
+    "README.zh-CN.md",
     "ARCHITECTURE.md",
+    "assets/whale-chan.png",
     "LICENSE"
   ],
   "pi": {
