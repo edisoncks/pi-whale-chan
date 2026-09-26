@@ -7,7 +7,9 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "types": ["node"]
   },
-  "include": ["index.ts", "persona.ts"]
+  "include": ["index.ts", "persona.ts", "eval/**/*.ts"]
 }

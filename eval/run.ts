@@ -39,14 +39,24 @@ interface ScoredRecord extends Record {
 	summaryScore: ReplyScore | null;
 }
 
+const THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
+type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
 function parseArgs(argv: string[]) {
-	const out = {
+	const out: {
+		model: string;
+		conditions: string[];
+		scenarios: string[];
+		repeat: number;
+		thinking: ThinkingLevel;
+		replay: string;
+	} = {
 		model: "opencode-go/deepseek-v4.1-flash",
 		conditions: ["full"],
 		scenarios: ["en-6"],
 		repeat: 1,
-		thinking: "off" as "off" | "low" | "medium" | "high",
-		replay: "" as string,
+		thinking: "off",
+		replay: "",
 	};
 	for (let i = 2; i < argv.length; i++) {
 		const a = argv[i];
@@ -62,11 +72,19 @@ function parseArgs(argv: string[]) {
 		else if (a === "--conditions") out.conditions = next().split(",").map((s) => s.trim()).filter(Boolean);
 		else if (a === "--scenarios") out.scenarios = next().split(",").map((s) => s.trim()).filter(Boolean);
 		else if (a === "--repeat") {
-			const n = Number.parseInt(next(), 10);
-			if (!Number.isInteger(n) || n < 1) throw new Error(`--repeat must be a positive integer, got: ${argv[i]}`);
-			out.repeat = n;
+			const raw = next();
+			if (!/^\d+$/.test(raw) || Number.parseInt(raw, 10) < 1) {
+				throw new Error(`--repeat must be a positive integer, got: ${raw}`);
+			}
+			out.repeat = Number.parseInt(raw, 10);
 		}
-		else if (a === "--thinking") out.thinking = next() as typeof out.thinking;
+		else if (a === "--thinking") {
+			const value = next();
+			if (!(THINKING_LEVELS as readonly string[]).includes(value)) {
+				throw new Error(`--thinking must be one of: ${THINKING_LEVELS.join(", ")}, got: ${value}`);
+			}
+			out.thinking = value as ThinkingLevel;
+		}
 		else if (a === "--replay") out.replay = next();
 		else throw new Error(`unknown argument: ${a}`);
 	}
@@ -135,6 +153,19 @@ function writeRun(model: string, records: Record[]): void {
 }
 
 async function runMatrix(args: ReturnType<typeof parseArgs>): Promise<void> {
+	// Validate the whole matrix before building the model runtime: a typo must
+	// fail loud without spending a single request (or even reading credentials).
+	const scenarios: Scenario[] = args.scenarios.map((sid) => {
+		const s = scenarioById(sid);
+		if (!s) throw new Error(`unknown scenario: ${sid} (have: ${SCENARIOS.map((x) => x.id).join(", ")})`);
+		return s;
+	});
+	const conditions = args.conditions.map((cName) => {
+		const condition = CONDITIONS[cName] as Conditions | undefined;
+		if (!condition) throw new Error(`unknown condition: ${cName} (have: ${Object.keys(CONDITIONS).join(", ")})`);
+		return { name: cName, condition };
+	});
+
 	const realAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	const modelRuntime = await ModelRuntime.create({
 		authPath: join(realAgentDir, "auth.json"),
@@ -144,16 +175,8 @@ async function runMatrix(args: ReturnType<typeof parseArgs>): Promise<void> {
 	const model = modelRuntime.getModel(provider, id);
 	if (!model) throw new Error(`model not found: ${args.model}`);
 
-	const scenarios: Scenario[] = args.scenarios.map((sid) => {
-		const s = scenarioById(sid);
-		if (!s) throw new Error(`unknown scenario: ${sid} (have: ${SCENARIOS.map((x) => x.id).join(", ")})`);
-		return s;
-	});
-
 	const records: Record[] = [];
-	for (const cName of args.conditions) {
-		const condition = CONDITIONS[cName] as Conditions | undefined;
-		if (!condition) throw new Error(`unknown condition: ${cName} (have: ${Object.keys(CONDITIONS).join(", ")})`);
+	for (const { name: cName, condition } of conditions) {
 		for (const scenario of scenarios) {
 			for (let rep = 1; rep <= args.repeat; rep++) {
 				process.stdout.write(`running ${cName} / ${scenario.id} / rep${rep} ... `);
