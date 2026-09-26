@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/whale-chan.png" alt="鲸鱼娘" width="240">
+  <img src="assets/whale-chan.webp" alt="鲸鱼娘" width="240">
 </p>
 
 <h1 align="center">pi-whale-chan</h1>
