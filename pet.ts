@@ -398,37 +398,43 @@ export class WhalePetWidget implements Component {
 		// the thinking level changes, and every rule in the strip follows it.
 		const color = this.borderColor();
 		const divider = color(DIVIDER_CHAR);
+		const text = this.infoLines(width, hasAvatar);
+		// The separator comes first, so the strip reads as a panel that the
+		// editor's own top border closes at the bottom.
+		const lines: string[] = [this.rule(width, color)];
+		if (!hasAvatar) {
+			for (const line of text) lines.push(line);
+			return lines;
+		}
 		// Centre the frame inside a fixed slot. Frames are normalised to a square
 		// canvas so every pose occupies the same number of columns, and the
 		// centring keeps the gap to the divider symmetric and state-independent.
-		const offset = hasAvatar ? avatarInset(stateColumns(this.view.state)) : 0;
-		const text = this.infoLines(width, hasAvatar);
+		const offset = avatarInset(stateColumns(this.view.state));
 		const rows = Math.max(avatar.length, text.length);
 		// Center the four-line status block against the avatar so the strip does
 		// not look top-heavy.
 		const top = Math.max(0, Math.floor((rows - text.length) / 2));
-		// The separator comes first, so the strip reads as a panel that the
-		// editor's own top border closes at the bottom.
-		const lines: string[] = [this.rule(width, color)];
-		for (let row = 0; row < rows; row++) {
-			const left = avatar[row] ?? "";
-			const textIndex = row - top;
-			const right = textIndex >= 0 && textIndex < text.length ? (text[textIndex] as string) : "";
-			if (!hasAvatar) {
-				lines.push(right);
-			} else if (left.length > 0) {
-				// The frame anchors on this row, after the centring spaces. `C=1`
-				// leaves the cursor at `offset`, so the divider is one forward away,
-				// and the spaces sit in cells the image does not cover.
-				lines.push(
-					" ".repeat(offset) + left + `\x1b[${AVATAR_SLOT_COLUMNS - offset}C` + divider + " " + right,
-				);
-			} else {
-				// No image on this row: cursor-forward, so nothing paints over the
-				// cells the frame already occupies.
-				lines.push(`\x1b[${AVATAR_SLOT_COLUMNS}C` + divider + " " + right);
-			}
+		const right = (row: number): string => {
+			const index = row - top;
+			return index >= 0 && index < text.length ? (text[index] as string) : "";
+		};
+		// The frame is a *multi-row* Kitty image anchored on one line, but pi-tui
+		// only treats it as a block when the lines *after* it are empty: it then
+		// clears those rows itself and draws the frame across them. With panel text
+		// on those rows, pi-tui clears each row individually (ESC[2K), which detaches
+		// the image from their cells and leaves only its top row — the "stuck head"
+		// bug. So the panel is drawn by cursor movement *inside* the anchor line and
+		// the trailing lines are left empty, keeping the block reserved and redrawn
+		// atomically. (`Image.render` returns the escape on its first line and blanks
+		// for the rest, so `avatar[0]` is the frame and the blanks need no re-emit.)
+		let anchor = " ".repeat(offset) + (avatar[0] ?? "");
+		anchor += `\x1b[${AVATAR_SLOT_COLUMNS - offset}C` + divider + " " + right(0);
+		for (let row = 1; row < rows; row++) {
+			anchor += `\x1b[1B\r\x1b[${AVATAR_SLOT_COLUMNS}C` + divider + " " + right(row);
 		}
+		anchor += `\x1b[${rows - 1}A`;
+		lines.push(anchor);
+		for (let row = 1; row < rows; row++) lines.push("");
 		return lines;
 	}
 

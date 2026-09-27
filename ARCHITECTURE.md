@@ -176,6 +176,12 @@ the cursor without painting anything.
 `moveUp + sequence` there, so the image would be painted over text already
 written on the preceding rows. Rather than ship a scrambled strip, the widget
 renders a text-only status line unless `getCapabilities().images === "kitty"`.
+- **A multi-row image only survives if its trailing rows are blank.** pi-tui
+reserves an image's full height and redraws it as one block only when the lines
+after the escape are empty; if they hold text, it clears each row individually
+(`ESC[2K`), which detaches the image and leaves its top row. The panel is
+therefore drawn by cursor movement inside the anchor line, not on the avatar's
+trailing rows — see "Why the panel is drawn inside the image line".
 - **The strip must read as part of the input box, not as a floating banner.**
 A separator is drawn above it using the editor's own glyph (`─`) and its
 thinking-level colour. pi-tui's editor paints `"─".repeat(width)` with
@@ -230,6 +236,20 @@ channel, and asserts the text column is reserved with cursor-forward.
 **Why every frame shares one Kitty image id.** pi-tui's `imageId` option is
 documented for animations: reusing the id makes the terminal *replace* the placed
 image instead of accumulating one placement per frame.
+
+**Why the panel is drawn inside the image line.** pi-tui clears every changed line
+with `ESC[2K` before rewriting it, and it treats a multi-row image as a reserved
+block *only* when the lines after the escape are empty — then it clears those rows
+itself and draws the image across them. The avatar is a four-row image, but the
+four-line status panel used to sit on those trailing rows; because
+`agent_settled` updates the state and the stats together, the frame and the panel
+changed in the same render, pi-tui erased the trailing rows one by one, detaching
+the image from their cells and leaving only its top row — the "stuck head" bug,
+which reproduced on Kitty and WezTerm alike (a renderer issue, not a terminal
+one). The widget now emits the frame on its first line, blank lines for the rest
+(so pi-tui reserves the whole block and redraws it atomically), and draws the
+panel rows *inside* that anchor line with `ESC[1B` and cursor-forward, so nothing
+clears the image after it is drawn.
 
 **Why the pet has its own switch.** The persona is a prompt and style concern;
 the strip is a display preference. Coupling them would mean you could not keep
