@@ -36,7 +36,6 @@
   "scripts": {
     "typecheck": "tsc --noEmit --skipLibCheck",
     "test": "node --test",
-    "fidelity": "node scripts/measure-frame-fidelity.mjs",
     "eval": "node eval/run.ts",
     "eval:probe": "node eval/probe.ts"
   },
