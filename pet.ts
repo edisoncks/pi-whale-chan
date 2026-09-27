@@ -175,6 +175,14 @@ export const DIVIDER_CHAR = "│";
 /** Columns between the avatar's last cell and the status text: divider + blank. */
 const DIVIDER_COLUMNS = 2;
 
+/**
+ * First two bytes of a Kitty graphics escape. pi-tui's own (unexported)
+ * `isImageLine` keys off this prefix to recognise a line that carries an image;
+ * the widget re-checks it to confirm `Image.render` actually emitted a frame,
+ * rather than trusting the blank tail that follows the escape.
+ */
+const KITTY_ESCAPE_PREFIX = "\x1b_G";
+
 const frameCache = new Map<string, string | null>();
 
 /** Absolute path of a frame asset; exported for tests. */
@@ -393,7 +401,12 @@ export class WhalePetWidget implements Component {
 		const cycle = PET_CYCLES[this.view.state];
 		const frame = cycle[this.index % cycle.length];
 		const avatar = this.withAvatar && frame !== undefined ? this.avatarLines(frame.asset, width) : [];
-		const hasAvatar = avatar.length > 0;
+		// `Image.render` returns the graphics escape on its first line and blanks for
+		// the rest (see the module header). Guard that contract: a first line without
+		// the escape means no frame was drawn, and a divider beside the blank tail
+		// would be a half-empty strip. Degrade to the text-only layout instead of
+		// trusting a shape a future pi-tui might stop producing.
+		const hasAvatar = avatar.length > 0 && (avatar[0] ?? "").includes(KITTY_ESCAPE_PREFIX);
 		// One colour lookup per render: the editor recolours its border whenever
 		// the thinking level changes, and every rule in the strip follows it.
 		const color = this.borderColor();
@@ -410,10 +423,18 @@ export class WhalePetWidget implements Component {
 		// canvas so every pose occupies the same number of columns, and the
 		// centring keeps the gap to the divider symmetric and state-independent.
 		const offset = avatarInset(stateColumns(this.view.state));
-		const rows = Math.max(avatar.length, text.length);
-		// Center the four-line status block against the avatar so the strip does
-		// not look top-heavy.
-		const top = Math.max(0, Math.floor((rows - text.length) / 2));
+		// The reserved block is exactly the image's own row count: that is what
+		// pi-tui reads back out of the escape to decide how many rows to clear and
+		// redraw atomically. Every cursor step and blank line below is measured in
+		// `block`, never in the panel, so the two can never disagree even if a future
+		// status line grew past the frame. A trailing line beyond the block would be
+		// treated as ordinary text, cleared with `ESC[2K`, and the "stuck head" bug
+		// would return.
+		const block = avatar.length;
+		// Center the four-line status block against the avatar so the strip does not
+		// look top-heavy. A panel taller than the frame is clamped to the block for
+		// the same reason: overflow rows are outside the reserved image.
+		const top = Math.max(0, Math.floor((block - text.length) / 2));
 		const right = (row: number): string => {
 			const index = row - top;
 			return index >= 0 && index < text.length ? (text[index] as string) : "";
@@ -425,16 +446,16 @@ export class WhalePetWidget implements Component {
 		// the image from their cells and leaves only its top row — the "stuck head"
 		// bug. So the panel is drawn by cursor movement *inside* the anchor line and
 		// the trailing lines are left empty, keeping the block reserved and redrawn
-		// atomically. (`Image.render` returns the escape on its first line and blanks
-		// for the rest, so `avatar[0]` is the frame and the blanks need no re-emit.)
+		// atomically. (`Image.render` already returns blanks after the escape, so
+		// those lines only need to exist, not to repeat the sequence.)
 		let anchor = " ".repeat(offset) + (avatar[0] ?? "");
 		anchor += `\x1b[${AVATAR_SLOT_COLUMNS - offset}C` + divider + " " + right(0);
-		for (let row = 1; row < rows; row++) {
+		for (let row = 1; row < block; row++) {
 			anchor += `\x1b[1B\r\x1b[${AVATAR_SLOT_COLUMNS}C` + divider + " " + right(row);
 		}
-		anchor += `\x1b[${rows - 1}A`;
+		anchor += `\x1b[${block - 1}A`;
 		lines.push(anchor);
-		for (let row = 1; row < rows; row++) lines.push("");
+		for (let row = 1; row < block; row++) lines.push("");
 		return lines;
 	}
 

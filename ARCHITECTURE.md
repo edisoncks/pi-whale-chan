@@ -249,7 +249,13 @@ which reproduced on Kitty and WezTerm alike (a renderer issue, not a terminal
 one). The widget now emits the frame on its first line, blank lines for the rest
 (so pi-tui reserves the whole block and redraws it atomically), and draws the
 panel rows *inside* that anchor line with `ESC[1B` and cursor-forward, so nothing
-clears the image after it is drawn.
+clears the image after it is drawn. Every blank line and cursor step is measured
+in the *image's own* row count — the number pi-tui reads back out of the escape —
+never in the panel height, so the reserved block and the drawn block can never
+disagree (a trailing line past the block would be cleared individually and the
+bug would return). The widget also re-checks that the first line really carries a
+Kitty escape and falls back to the text-only strip otherwise, rather than drawing
+a divider beside a blank tail.
 
 **Why the pet has its own switch.** The persona is a prompt and style concern;
 the strip is a display preference. Coupling them would mean you could not keep
