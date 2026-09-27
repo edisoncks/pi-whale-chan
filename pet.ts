@@ -175,6 +175,14 @@ export const DIVIDER_CHAR = "│";
 /** Columns between the avatar's last cell and the status text: divider + blank. */
 const DIVIDER_COLUMNS = 2;
 
+/**
+ * First two bytes of a Kitty graphics escape. pi-tui's own (unexported)
+ * `isImageLine` keys off this prefix to recognise a line that carries an image;
+ * the widget re-checks it to confirm `Image.render` actually emitted a frame,
+ * rather than trusting the blank tail that follows the escape.
+ */
+const KITTY_ESCAPE_PREFIX = "\x1b_G";
+
 const frameCache = new Map<string, string | null>();
 
 /** Absolute path of a frame asset; exported for tests. */
@@ -393,42 +401,61 @@ export class WhalePetWidget implements Component {
 		const cycle = PET_CYCLES[this.view.state];
 		const frame = cycle[this.index % cycle.length];
 		const avatar = this.withAvatar && frame !== undefined ? this.avatarLines(frame.asset, width) : [];
-		const hasAvatar = avatar.length > 0;
+		// `Image.render` returns the graphics escape on its first line and blanks for
+		// the rest (see the module header). Guard that contract: a first line without
+		// the escape means no frame was drawn, and a divider beside the blank tail
+		// would be a half-empty strip. Degrade to the text-only layout instead of
+		// trusting a shape a future pi-tui might stop producing.
+		const hasAvatar = avatar.length > 0 && (avatar[0] ?? "").includes(KITTY_ESCAPE_PREFIX);
 		// One colour lookup per render: the editor recolours its border whenever
 		// the thinking level changes, and every rule in the strip follows it.
 		const color = this.borderColor();
 		const divider = color(DIVIDER_CHAR);
-		// Centre the frame inside a fixed slot. Frames are normalised to a square
-		// canvas so every pose occupies the same number of columns, and the
-		// centring keeps the gap to the divider symmetric and state-independent.
-		const offset = hasAvatar ? avatarInset(stateColumns(this.view.state)) : 0;
 		const text = this.infoLines(width, hasAvatar);
-		const rows = Math.max(avatar.length, text.length);
-		// Center the four-line status block against the avatar so the strip does
-		// not look top-heavy.
-		const top = Math.max(0, Math.floor((rows - text.length) / 2));
 		// The separator comes first, so the strip reads as a panel that the
 		// editor's own top border closes at the bottom.
 		const lines: string[] = [this.rule(width, color)];
-		for (let row = 0; row < rows; row++) {
-			const left = avatar[row] ?? "";
-			const textIndex = row - top;
-			const right = textIndex >= 0 && textIndex < text.length ? (text[textIndex] as string) : "";
-			if (!hasAvatar) {
-				lines.push(right);
-			} else if (left.length > 0) {
-				// The frame anchors on this row, after the centring spaces. `C=1`
-				// leaves the cursor at `offset`, so the divider is one forward away,
-				// and the spaces sit in cells the image does not cover.
-				lines.push(
-					" ".repeat(offset) + left + `\x1b[${AVATAR_SLOT_COLUMNS - offset}C` + divider + " " + right,
-				);
-			} else {
-				// No image on this row: cursor-forward, so nothing paints over the
-				// cells the frame already occupies.
-				lines.push(`\x1b[${AVATAR_SLOT_COLUMNS}C` + divider + " " + right);
-			}
+		if (!hasAvatar) {
+			for (const line of text) lines.push(line);
+			return lines;
 		}
+		// Centre the frame inside a fixed slot. Frames are normalised to a square
+		// canvas so every pose occupies the same number of columns, and the
+		// centring keeps the gap to the divider symmetric and state-independent.
+		const offset = avatarInset(stateColumns(this.view.state));
+		// The reserved block is exactly the image's own row count: that is what
+		// pi-tui reads back out of the escape to decide how many rows to clear and
+		// redraw atomically. Every cursor step and blank line below is measured in
+		// `block`, never in the panel, so the two can never disagree even if a future
+		// status line grew past the frame. A trailing line beyond the block would be
+		// treated as ordinary text, cleared with `ESC[2K`, and the "stuck head" bug
+		// would return.
+		const block = avatar.length;
+		// Center the four-line status block against the avatar so the strip does not
+		// look top-heavy. A panel taller than the frame is clamped to the block for
+		// the same reason: overflow rows are outside the reserved image.
+		const top = Math.max(0, Math.floor((block - text.length) / 2));
+		const right = (row: number): string => {
+			const index = row - top;
+			return index >= 0 && index < text.length ? (text[index] as string) : "";
+		};
+		// The frame is a *multi-row* Kitty image anchored on one line, but pi-tui
+		// only treats it as a block when the lines *after* it are empty: it then
+		// clears those rows itself and draws the frame across them. With panel text
+		// on those rows, pi-tui clears each row individually (ESC[2K), which detaches
+		// the image from their cells and leaves only its top row — the "stuck head"
+		// bug. So the panel is drawn by cursor movement *inside* the anchor line and
+		// the trailing lines are left empty, keeping the block reserved and redrawn
+		// atomically. (`Image.render` already returns blanks after the escape, so
+		// those lines only need to exist, not to repeat the sequence.)
+		let anchor = " ".repeat(offset) + (avatar[0] ?? "");
+		anchor += `\x1b[${AVATAR_SLOT_COLUMNS - offset}C` + divider + " " + right(0);
+		for (let row = 1; row < block; row++) {
+			anchor += `\x1b[1B\r\x1b[${AVATAR_SLOT_COLUMNS}C` + divider + " " + right(row);
+		}
+		anchor += `\x1b[${block - 1}A`;
+		lines.push(anchor);
+		for (let row = 1; row < block; row++) lines.push("");
 		return lines;
 	}
 

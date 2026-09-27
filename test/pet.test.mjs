@@ -64,7 +64,7 @@ const {
 	stateColumns,
 	textColumn,
 } = await import("../pet.ts");
-const { resetCapabilitiesCache, setCapabilities } = await import("@earendil-works/pi-tui");
+const { TuiMainScreen, resetCapabilitiesCache, setCapabilities } = await import("@earendil-works/pi-tui");
 
 /**
  * Alpha bounding box of an 8-bit RGBA, non-interlaced PNG.
@@ -303,16 +303,22 @@ test("the vertical divider is a straight line across the whole strip", () => {
 		const lines = widget.render(40);
 		widget.dispose();
 
+		// The avatar block is the anchor line plus one blank line per remaining
+		// avatar row: pi-tui only reserves a multi-row image when the lines after it
+		// are empty (see `WhalePetWidget.render`). The panel text is drawn by cursor
+		// movement inside the anchor line, so the divider lands once per row.
 		const rows = lines.slice(1);
 		assert.equal(rows.length, AVATAR_MAX_ROWS, `${state}: one row per avatar row`);
-		assert.ok(
-			rows.every((line) => line.includes(DIVIDER_CHAR)),
-			`${state}: every strip row draws the divider, so it spans the avatar's full height`,
-		);
 		assert.deepEqual(
-			rows.map(dividerColumn),
-			Array(AVATAR_MAX_ROWS).fill(AVATAR_SLOT_COLUMNS),
-			`${state}: the divider lands on the same column in every row, so it does not zag`,
+			rows.slice(1),
+			Array(AVATAR_MAX_ROWS - 1).fill(""),
+			`${state}: the trailing rows stay blank so pi-tui reserves the whole image`,
+		);
+		const segments = rows[0].split("\x1b[1B");
+		assert.equal(segments.length, AVATAR_MAX_ROWS, `${state}: the anchor steps down once per row`);
+		assert.ok(
+			segments.every((segment) => segment.includes(`\x1b[${AVATAR_SLOT_COLUMNS}C${DIVIDER_CHAR}`)),
+			`${state}: every row forwards to the slot column before the divider, so it does not zag`,
 		);
 		// The divider must be drawn after the image escape, never over it.
 		assert.ok(
@@ -320,6 +326,45 @@ test("the vertical divider is a straight line across the whole strip", () => {
 			`${state}: the divider lands past the image`,
 		);
 	}
+});
+
+test("a changed frame is redrawn atomically, with no clear after the image", () => {
+	kitty();
+	// Drive the *real* `TuiMainScreen`, not just the widget string: the "stuck
+	// head" bug lived in pi-tui's differential renderer, which clears each changed
+	// line before rewriting it. The widget's own output looks identical either way,
+	// so only a renderer-level assertion can catch a regression here.
+	const writes = [];
+	const terminal = {
+		columns: 80,
+		rows: 24,
+		write: (data) => writes.push(data),
+		hideCursor() {},
+		showCursor() {},
+		start() {},
+		stop() {},
+	};
+	const screen = new TuiMainScreen(terminal);
+	const widget = makeWidget({ state: "idle", model: "m" }, screen);
+	screen.addChild(widget);
+
+	// First render establishes the previous buffer (a full render, so no per-line clears).
+	screen.doRender();
+	writes.length = 0;
+
+	// `agent_settled` changes the state *and* the stats in one update — the exact
+	// frame that used to lose the avatar's lower rows.
+	widget.update({ state: "working", stats: { ...DEFAULT_STATS, inputTokens: 11_000 } });
+	screen.doRender();
+	widget.dispose();
+
+	const output = writes.join("");
+	const drawAt = output.indexOf("f=100");
+	assert.ok(drawAt > -1, "the new frame is transmitted");
+	// pi-tui must clear the whole reserved block *before* drawing the image across
+	// it. A clear after the escape detaches the lower rows and reproduces the bug.
+	assert.equal(output.indexOf("\x1b[2K", drawAt), -1, "nothing clears the image after it is drawn");
+	assert.ok(output.lastIndexOf("\x1b[2K") < drawAt, "the block is cleared before the frame is drawn");
 });
 
 test("the text-only strip draws no divider", () => {
