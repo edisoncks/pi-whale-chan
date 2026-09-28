@@ -709,11 +709,21 @@ export class WhalePetWidget implements Component {
 		return parts.join(" · ");
 	}
 
-	/** `🪾 branch · 📂 cwd · session · statuses` for the location row. */
+	/**
+	 * `🌿 branch · 📂 cwd · session · statuses` for the location row.
+	 *
+	 * Keep the branch glyph inside the emoji ranges the legacy terminal width
+	 * tables know (`U+1F300–U+1F64F`, `U+1F900–U+1F9FF`). xterm.js — and so
+	 * code-server in the browser — defaults to the Unicode 6 table, where
+	 * Unicode 12+ pictographs like `🪾` (U+1FABE) measure one cell while the
+	 * font paints them two, so the glyph swallows the space after it. Native
+	 * terminals (WezTerm, Rio, Kitty) use current widths and render the gap
+	 * fine, which is why an in-range icon is the only portable fix.
+	 */
 	private tideLocation(stats: PetStats): string {
 		const parts: string[] = [];
 		const branch = this.footerData?.getGitBranch();
-		if (branch) parts.push(this.theme.fg("accent", `🪾 ${branch}`));
+		if (branch) parts.push(this.theme.fg("accent", `🌿 ${branch}`));
 		parts.push(this.theme.fg("dim", `📂 ${shortenHome(stats.cwd)}`));
 		if (stats.sessionName) parts.push(this.theme.fg("muted", stats.sessionName));
 		const statuses = this.footerData ? formatStatuses(this.footerData.getExtensionStatuses()) : "";
