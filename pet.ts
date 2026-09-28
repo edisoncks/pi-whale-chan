@@ -380,20 +380,21 @@ export function formatTokens(count: number): string {
 }
 
 /**
- * Progress-bar colour, by cache hit and fill. Priority mirrors pi-emote: a
- * cold cache (0 < hit < 50%) is the alarming one, then a nearly-full context,
- * then a healthy cache. A hit rate of exactly 0 is treated as "no cache data
- * yet" and stays neutral, matching pi-emote — a genuine 0% is indistinguishable
- * from an empty session here.
+ * Progress-bar colour. The context thresholds mirror Pi's own footer: above 70%
+ * is the caution and above 90% the alarm. Green (`success`) is the healthy
+ * baseline, so an empty or lightly-used gauge is green rather than the terminal's
+ * default foreground. A cold cache (0 < hit < 50%) is also an alarm, matching
+ * pi-emote; a hit rate of exactly 0 is treated as "no cache data yet", not an
+ * alarm — a genuine 0% is indistinguishable from an empty session.
  */
 export function resolveProgressColor(
 	percent: number,
 	cacheHitRate: number,
-): "error" | "warning" | "success" | "text" {
+): "error" | "warning" | "success" {
+	if (percent > 90) return "error";
 	if (cacheHitRate > 0 && cacheHitRate < 50) return "error";
-	if (percent >= 75) return "warning";
-	if (cacheHitRate >= 50) return "success";
-	return "text";
+	if (percent > 70) return "warning";
+	return "success";
 }
 
 const EIGHTH_BLOCKS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"] as const;
@@ -407,14 +408,26 @@ export const TIDE_FOAM_FRAMES = ["", "≈", "~", "≈", ""] as const;
 /** Slow cadence for the text-only waterline pulse (the avatar keeps its own). */
 const TIDE_PULSE_MS = 300;
 
-/** Preferred gauge width; it shrinks only when the terminal is too narrow. */
-const TIDE_BAR_CELLS = 20;
+/** Preferred gauge width, end walls included; shrinks only when the terminal is too narrow. */
+const TIDE_BAR_CELLS = 22;
+
+/**
+ * Eighth-block end walls for the tide bar. They belong to the same block family
+ * as the `█`/`░`/eighth-block fill, so the gauge reads as one run instead of
+ * being wrapped in ASCII `[`/`]`. A wall is drawn only where the fill does *not*
+ * already draw the edge: `▏` while the gauge is empty, `▕` until it is full, and
+ * neither once a full bar has reached both ends. Exported so the tests can pin
+ * them.
+ */
+export const TIDE_BAR_LEFT_CAP = "▏";
+export const TIDE_BAR_RIGHT_CAP = "▕";
 
 /**
  * Context bar for the status panel: fresh input as `█`, cached prompt as `░`,
- * a horizontal eighth-block leading edge, and a one-cell foam glyph riding the
- * waterline (`foam` = "" for calm). Fills the requested cell count so the row
- * can share its width with a right-aligned percentage.
+ * a horizontal eighth-block leading edge, a one-cell foam glyph riding the
+ * waterline (`foam` = "" for calm), and `TIDE_BAR_LEFT_CAP`/`TIDE_BAR_RIGHT_CAP`
+ * end walls that appear only where the fill leaves the edge bare. Always returns
+ * exactly `cells` columns; the caller just follows it with the inline reading.
  */
 export function buildTideBar(stats: PetStats, cells: number, foam = ""): string {
 	if (cells <= 0) return "";
@@ -434,6 +447,12 @@ export function buildTideBar(stats: PetStats, cells: number, foam = ""): string 
 		else if (filled > 0) out.push(EIGHTH_BLOCKS[filled - 1] as string);
 		else out.push(" ");
 	}
+	// A wall marks only an edge the fill does not already draw: an empty gauge
+	// gets both, a partial gauge keeps just the right one, a full gauge gets
+	// neither, so a full bar reads clean instead of wearing redundant caps.
+	if (filledSubs === 0) out[0] = TIDE_BAR_LEFT_CAP;
+	if (filledSubs < totalSubs) out[cells - 1] = TIDE_BAR_RIGHT_CAP;
+	// The foam rides the first free cell *after* the walls, so it never covers one.
 	if (foam.length > 0) {
 		const edge = out.indexOf(" ");
 		if (edge !== -1) out[edge] = foam;
@@ -659,13 +678,16 @@ export class WhalePetWidget implements Component {
 			const tokens = stats.contextTokens !== null ? formatTokens(stats.contextTokens) : "?";
 			const percentText = stats.contextPercent !== null ? `${percent.toFixed(1)}%` : "?";
 			const reading = `${percentText} · ${tokens}/${formatTokens(stats.contextWindow)}`;
-			const barCells = Math.max(6, Math.min(TIDE_BAR_CELLS, budget - visibleWidth(reading) - 5));
+			const barCells = Math.max(6, Math.min(TIDE_BAR_CELLS, budget - visibleWidth(reading) - 3));
 			const foam =
 				this.view.state === "working"
 					? (TIDE_FOAM_FRAMES[this.index % TIDE_FOAM_FRAMES.length] as string)
 					: "";
-			const gauge = this.theme.fg(color, `[${buildTideBar(stats, barCells, foam)}]`);
-			lines.push(`${gauge} · ${this.theme.fg("dim", reading)}`);
+			const gauge = this.theme.fg(color, buildTideBar(stats, barCells, foam));
+			// The `·` rides the same `dim` as the reading. A bare separator has no
+			// colour of its own, so it fell back to the terminal default (white) and
+			// clashed with the dim text beside it.
+			lines.push(`${gauge}${this.theme.fg("dim", ` · ${reading}`)}`);
 			// Row 3: usage meter, all inline.
 			lines.push(this.theme.fg("dim", this.usageMeter(stats)));
 			// Row 4: location, branch first because it is the field that changes.
@@ -696,7 +718,9 @@ export class WhalePetWidget implements Component {
 		if (stats.sessionName) parts.push(this.theme.fg("muted", stats.sessionName));
 		const statuses = this.footerData ? formatStatuses(this.footerData.getExtensionStatuses()) : "";
 		if (statuses.length > 0) parts.push(this.theme.fg("warning", statuses));
-		return parts.join(" · ");
+		// Dim separators, for the same reason as the gauge row: an uncoloured `·`
+		// would fall back to the terminal default and stand out against the parts.
+		return parts.join(this.theme.fg("dim", " · "));
 	}
 
 	/**

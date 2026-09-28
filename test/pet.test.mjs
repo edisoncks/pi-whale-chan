@@ -53,6 +53,8 @@ const {
 	DIVIDER_CHAR,
 	PET_CYCLES,
 	RULE_CHAR,
+	TIDE_BAR_LEFT_CAP,
+	TIDE_BAR_RIGHT_CAP,
 	TIDE_FOAM_FRAMES,
 	WhalePetWidget,
 	avatarInset,
@@ -648,11 +650,17 @@ test("formatTokens compacts large counts", () => {
 	assert.equal(formatTokens(1_000_000), "1.0M");
 });
 
-test("progress colour prioritises a cold cache, then a nearly-full context", () => {
+test("progress colour mirrors Pi's footer thresholds and alarms on a cold cache", () => {
 	assert.equal(resolveProgressColor(10, 20), "error", "a cold cache is the alarm");
-	assert.equal(resolveProgressColor(80, 90), "warning", "a nearly-full context outranks cache");
+	assert.equal(resolveProgressColor(70, 99.8), "success", "70% is still healthy (Pi warns above 70)");
+	assert.equal(resolveProgressColor(71, 99.8), "warning", "above 70% is the caution");
+	assert.equal(resolveProgressColor(90, 99.8), "warning", "90% is still the caution (Pi alarms above 90)");
+	assert.equal(resolveProgressColor(91, 99.8), "error", "above 90% is the alarm");
+	assert.equal(resolveProgressColor(100, 99.8), "error", "a completely full context is an error");
+	assert.equal(resolveProgressColor(104, 99.8), "error", "an over-full context stays an error");
 	assert.equal(resolveProgressColor(10, 90), "success", "a healthy cache is good news");
-	assert.equal(resolveProgressColor(10, 0), "text", "a fresh session stays neutral");
+	assert.equal(resolveProgressColor(0, 0), "success", "an empty gauge is the healthy green, not white");
+	assert.equal(resolveProgressColor(10, 0), "success", "no cache data yet is still healthy, not neutral");
 });
 
 test("the tide panel groups identity, gauge, meter, and location", () => {
@@ -714,6 +722,42 @@ test("buildTideBar fills, shades cache, and rides the foam", () => {
 	const foam = buildTideBar(stats, 20, "≈");
 	assert.match(foam, /≈/, "the foam glyph rides the waterline");
 	assert.ok(TIDE_FOAM_FRAMES.includes("≈"), "the foam has a pulse frame");
+});
+
+test("the gauge grows a wall only where the fill leaves the edge bare", () => {
+	const at = (percent) => buildTideBar({ ...DEFAULT_STATS, contextPercent: percent }, 22, "");
+	const empty = at(0);
+	const partial = at(50);
+	const full = at(100);
+
+	assert.ok(
+		empty.startsWith(TIDE_BAR_LEFT_CAP) && empty.endsWith(TIDE_BAR_RIGHT_CAP),
+		"an empty gauge wears both eighth-block walls",
+	);
+	assert.ok(
+		!partial.startsWith(TIDE_BAR_LEFT_CAP) && partial.endsWith(TIDE_BAR_RIGHT_CAP),
+		"a partial gauge keeps only the right wall",
+	);
+	assert.ok(
+		!full.startsWith(TIDE_BAR_LEFT_CAP) && !full.endsWith(TIDE_BAR_RIGHT_CAP),
+		"a full gauge wears no walls",
+	);
+});
+
+test("the separator after the gauge shares the dim reading", () => {
+	kitty();
+	const theme = { ...THEME, fg: (color, text) => `<${color}>${text}</${color}>` };
+	const stats = { ...DEFAULT_STATS, contextPercent: 50 };
+	const widget = makeWidget({ state: "idle", model: "m", stats }, TUI, theme);
+	const row = widget.render(120).find((line) => line.includes("50.0%"));
+	widget.dispose();
+
+	assert.ok(row, "the gauge row renders");
+	// A bare `·` had no colour of its own, so it fell back to the terminal default
+	// (white) beside the dim reading; `]` cannot appear in the cursor-forward CSI,
+	// so it is the reliable tell that the old ASCII wrapper is gone too.
+	assert.match(row, /<dim> · 50\.0%/, "the separator shares the reading's dim colour");
+	assert.ok(!row.includes("]"), "the bar is no longer wrapped in ASCII brackets");
 });
 
 test("statuses are sorted by key and stripped to one line", () => {
