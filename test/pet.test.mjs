@@ -687,7 +687,7 @@ test("the tide panel groups identity, gauge, meter, and location", () => {
 	assert.match(text, /1\.4%/, "the context percentage is on the gauge row");
 	assert.match(text, /⚡99\.8%/, "the cache hit rate uses the bolt");
 	assert.match(text, /🍚 0\.003/, "the cost is the rice counter");
-	assert.match(text, /🪾 feat\/pet-footer/, "the branch leads the location row");
+	assert.match(text, /🌿 feat\/pet-footer/, "the branch leads the location row");
 	assert.match(text, /α/, "extension statuses still ride the location row");
 });
 
@@ -990,7 +990,26 @@ test("the strip above the editor carries the footer's git branch", async () => {
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	const widget = mount({ widgets, footers, footerData });
-	assert.match(widget.render(120).join("\n"), /🪾 feat\/pet-footer/, "footerData reaches the widget");
+	assert.match(widget.render(120).join("\n"), /🌿 feat\/pet-footer/, "footerData reaches the widget");
+	widget.dispose();
+});
+
+test("the branch icon stays inside the legacy terminal width tables", async () => {
+	kitty();
+	const footerData = makeFooterData({ getGitBranch: () => "feat/pet-footer" });
+	const { handlers, widgets, footers, ctx } = makeExtensionHarness(footerData);
+	await handlers.get("session_start")({ type: "session_start" }, ctx);
+
+	const widget = mount({ widgets, footers, footerData });
+	const icon = widget.render(120).join("\n").match(/(.) feat\/pet-footer/u)?.[1];
+	assert.ok(icon, "the branch is preceded by an icon and a space");
+	// xterm.js — code-server in the browser — still ships the Unicode 6 width
+	// table, where Unicode 12+ pictographs measure one cell but paint two, so
+	// the glyph overdraws the space after it. Native terminals agree with the
+	// modern table, so only a legacy-wide codepoint renders correctly everywhere.
+	const cp = icon.codePointAt(0);
+	const legacyWide = (cp >= 0x1f300 && cp <= 0x1f64f) || (cp >= 0x1f900 && cp <= 0x1f9ff);
+	assert.ok(legacyWide, `branch icon U+${cp.toString(16).toUpperCase()} must be in a legacy-wide emoji range`);
 	widget.dispose();
 });
 

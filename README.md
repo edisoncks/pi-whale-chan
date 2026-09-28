@@ -49,7 +49,7 @@ running, and vice versa.
   session into identity (`🐳` model · `🔌` provider · `🧠` thinking level), a
   fixed-width context gauge whose waterline ripples while a turn runs, a usage
   meter (`↑`/`↓` tokens, `R`/`W` cache, `⚡` hit rate, `🍚` cost), and a
-  location row (`🪾` branch · `📂` cwd · session name · `ui.setStatus` entries).
+  location row (`🌿` branch · `📂` cwd · session name · `ui.setStatus` entries).
   Everything is inline and left-aligned, so a wide terminal never flings a
   value to the far edge. The built-in footer is hidden while the strip is on,
   so the status lives in one place instead of two. She hugs her pillow and dozes
