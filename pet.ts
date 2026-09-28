@@ -1,10 +1,12 @@
 /**
- * Whale-chan pet widget — an animated avatar plus a model/status strip that Pi
- * draws above the editor.
+ * Whale-chan pet — an animated avatar plus a model/status strip that Pi draws
+ * above the editor as a widget. The extension replaces Pi's built-in footer with
+ * an empty footer component, so the strip owns the status surface without
+ * duplicating it below.
  *
- * Display-only by construction: this renders inside Pi's extension widget
- * container and never calls `sendMessage`/`appendEntry`, so it cannot enter the
- * LLM context, change the system prompt, or invalidate a cached prefix.
+ * Display-only by construction: this renders inside Pi's widget container and
+ * never calls `sendMessage`/`appendEntry`, so it cannot enter the LLM context,
+ * change the system prompt, or invalidate a cached prefix.
  *
  * Artwork is derived from `dsh-whale-pet` by Er1c0v0 (CC-BY-4.0). The frame
  * order and per-frame timing below are copied verbatim from that project's
@@ -45,6 +47,7 @@ import {
 	getPngDimensions,
 	Image,
 	truncateToWidth,
+	visibleWidth,
 	type Component,
 	type TUI,
 } from "@earendil-works/pi-tui";
@@ -93,9 +96,8 @@ export interface PetViewModel {
 }
 
 /**
- * Snapshot of the session stats the status panel renders. The four-line layout
- * mirrors pi-emote's info panel: model/level/window, context progress,
- * token+cost totals, and the working directory.
+ * Snapshot of the session stats the status panel renders: the same data Pi's
+ * footer carries, regrouped into identity / gauge / meter / location.
  */
 export interface PetStats {
 	/** Whether the model reasons; controls the thinking-level suffix. */
@@ -106,10 +108,32 @@ export interface PetStats {
 	readonly contextPercent: number | null;
 	readonly inputTokens: number;
 	readonly outputTokens: number;
-	/** Cache hit rate of the latest prompt, 0-100. */
-	readonly cacheHitRate: number;
+	/** Cumulative cache-read tokens, shown as `R…` like Pi's footer. */
+	readonly cacheRead: number;
+	/** Cumulative cache-write tokens, shown as `W…` like Pi's footer. */
+	readonly cacheWrite: number;
+	/** Cache hit rate of the latest prompt, 0-100, or null when unmeasured. */
+	readonly cacheHitRate: number | null;
 	readonly cost: number;
 	readonly cwd: string;
+	/** Custom session name, shown after the cwd like Pi's footer. */
+	readonly sessionName: string | null;
+	/** Provider display name (e.g. "OpenCode Go"), prefixed when >1 is available. */
+	readonly provider: string;
+}
+
+/**
+ * The slice of Pi's `ReadonlyFooterDataProvider` this widget reads. Declared
+ * structurally for the same reason as `PetTheme`: it keeps the module free of
+ * the coding-agent's internal module path while a real provider still
+ * satisfies it. These fields are the data a footer owns and an extension
+ * cannot get from `ctx` alone (git branch and `ui.setStatus` entries).
+ */
+export interface PetFooterData {
+	getGitBranch(): string | null;
+	getExtensionStatuses(): ReadonlyMap<string, string>;
+	getAvailableProviderCount(): number;
+	onBranchChange(callback: () => void): () => void;
 }
 
 const ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), "assets", "whale-pet");
@@ -308,35 +332,74 @@ export function resolveProgressColor(
 const EIGHTH_BLOCKS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"] as const;
 
 /**
- * Context progress bar. Cached tokens fill a cell as `░` and fresh input as
- * `█` (or an eighth-block for a partial cell). The minimum fill is one full
- * cell, so a non-zero context is always visible instead of rounding to nothing.
+ * Foam frames for the waterline pulse. The empty entries let the ripple fade in
+ * and out; index 0 is flat water, what an idle pet shows.
  */
-export function buildProgressBar(stats: PetStats): string {
-	const segments = 20;
-	const subsPerSegment = 8;
-	const totalSubs = segments * subsPerSegment;
-	const percent = stats.contextPercent ?? 0;
-	const filledSubs = percent === 0 ? 0 : Math.max(Math.ceil((percent / 100) * totalSubs), subsPerSegment);
-	const cacheSubs = Math.floor(filledSubs * (stats.cacheHitRate / 100));
-	const bar = Array.from({ length: segments }, (_, i) => {
-		const start = i * subsPerSegment;
-		const end = start + subsPerSegment;
-		const cacheInSeg = Math.max(0, Math.min(cacheSubs, end) - start);
-		const inputInSeg = Math.max(0, Math.min(filledSubs, end) - Math.max(cacheSubs, start));
-		if (cacheInSeg > 0 && inputInSeg > 0) return "█";
-		if (inputInSeg > 0) return EIGHTH_BLOCKS[inputInSeg - 1];
-		if (cacheInSeg > 0) return "░";
-		return " ";
-	}).join("");
-	const tokens = stats.contextTokens !== null ? formatTokens(stats.contextTokens) : "?";
-	return `⏵▕${bar}▏ ${tokens} (${percent.toFixed(1)}%)`;
+export const TIDE_FOAM_FRAMES = ["", "≈", "~", "≈", ""] as const;
+
+/** Slow cadence for the text-only waterline pulse (the avatar keeps its own). */
+const TIDE_PULSE_MS = 300;
+
+/** Preferred gauge width; it shrinks only when the terminal is too narrow. */
+const TIDE_BAR_CELLS = 20;
+
+/**
+ * Context bar for the status panel: fresh input as `█`, cached prompt as `░`,
+ * a horizontal eighth-block leading edge, and a one-cell foam glyph riding the
+ * waterline (`foam` = "" for calm). Fills the requested cell count so the row
+ * can share its width with a right-aligned percentage.
+ */
+export function buildTideBar(stats: PetStats, cells: number, foam = ""): string {
+	if (cells <= 0) return "";
+	const percent = Math.max(0, Math.min(100, stats.contextPercent ?? 0));
+	const totalSubs = cells * 8;
+	const filledSubs = percent === 0 ? 0 : Math.max(1, Math.round((percent / 100) * totalSubs));
+	const cacheRatio = Math.max(0, Math.min(1, (stats.cacheHitRate ?? 0) / 100));
+	const cacheSubs = Math.round(filledSubs * cacheRatio);
+	const out: string[] = [];
+	for (let i = 0; i < cells; i++) {
+		const start = i * 8;
+		const end = start + 8;
+		const cacheIn = Math.max(0, Math.min(cacheSubs, end) - start);
+		const inputIn = Math.max(0, Math.min(filledSubs, end) - Math.max(cacheSubs, start));
+		const filled = cacheIn + inputIn;
+		if (filled >= 8) out.push(inputIn > 0 ? "█" : "░");
+		else if (filled > 0) out.push(EIGHTH_BLOCKS[filled - 1] as string);
+		else out.push(" ");
+	}
+	if (foam.length > 0) {
+		const edge = out.indexOf(" ");
+		if (edge !== -1) out[edge] = foam;
+	}
+	return out.join("");
 }
+
 
 /** Replace a leading home directory with `~`, like Pi's own footer. */
 function shortenHome(cwd: string): string {
 	const home = process.env.HOME || process.env.USERPROFILE;
 	return home !== undefined && home.length > 0 && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
+}
+
+/**
+ * Sanitize a `ui.setStatus` entry for a single line. Pi's footer folds newlines,
+ * tabs and carriage returns; this also folds the remaining C0/DEL control
+ * characters so a stray escape cannot bleed into the strip, then collapses runs.
+ */
+export function sanitizeStatusText(text: string): string {
+	// eslint-disable-next-line no-control-regex
+	return text.replace(/[\r\n\t\x00-\x1f\x7f]/g, " ").replace(/ +/g, " ").trim();
+}
+
+/**
+ * Extension statuses in a stable order, matching Pi's footer (sorted by key).
+ */
+export function formatStatuses(statuses: ReadonlyMap<string, string>): string {
+	return Array.from(statuses.entries())
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([, text]) => sanitizeStatusText(text))
+		.filter((text) => text.length > 0)
+		.join(" ");
 }
 
 export class WhalePetWidget implements Component {
@@ -350,16 +413,29 @@ export class WhalePetWidget implements Component {
 	private readonly imageId = allocateImageId();
 	private readonly images = new Map<string, Image>();
 	private readonly withAvatar: boolean;
+	/**
+	 * Footer-owned data (git branch, `ui.setStatus` entries, provider count).
+	 * Absent when the widget is mounted as a plain widget (e.g. under test),
+	 * in which case those fields simply stay blank.
+	 */
+	private readonly footerData: PetFooterData | undefined;
+	private readonly unsubscribeBranch: (() => void) | undefined;
 	private view: PetViewModel;
 	private index = 0;
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private closed = false;
 
-	constructor(tui: TUI, theme: PetTheme, view: PetViewModel) {
+	constructor(tui: TUI, theme: PetTheme, view: PetViewModel, footerData?: PetFooterData) {
 		this.tui = tui;
 		this.theme = theme;
 		this.view = view;
+		this.footerData = footerData;
 		this.withAvatar = getCapabilities().images === "kitty";
+		// The branch can change under us (checkout, rebase); Pi's footer redraws on
+		// that signal, and so must this one or the strip keeps a stale branch.
+		this.unsubscribeBranch = footerData?.onBranchChange(() => {
+			if (!this.closed) this.tui.requestRender();
+		});
 		this.arm();
 	}
 
@@ -386,6 +462,7 @@ export class WhalePetWidget implements Component {
 		this.closed = true;
 		if (this.timer !== undefined) clearTimeout(this.timer);
 		this.timer = undefined;
+		this.unsubscribeBranch?.();
 		this.images.clear();
 	}
 
@@ -412,6 +489,10 @@ export class WhalePetWidget implements Component {
 		const color = this.borderColor();
 		const divider = color(DIVIDER_CHAR);
 		const text = this.infoLines(width, hasAvatar);
+		// Self-heal the frame loop. If a tick was ever lost — a coalesced render, a
+		// throw between ticks, a bad index — restart it the moment Pi draws the
+		// strip, so the image can never stay frozen on its last drawn frame.
+		if (!this.closed && this.timer === undefined) this.arm();
 		// The separator comes first, so the strip reads as a panel that the
 		// editor's own top border closes at the bottom.
 		const lines: string[] = [this.rule(width, color)];
@@ -431,9 +512,9 @@ export class WhalePetWidget implements Component {
 		// treated as ordinary text, cleared with `ESC[2K`, and the "stuck head" bug
 		// would return.
 		const block = avatar.length;
-		// Center the four-line status block against the avatar so the strip does not
-		// look top-heavy. A panel taller than the frame is clamped to the block for
-		// the same reason: overflow rows are outside the reserved image.
+		// Center the status block against the avatar so the strip does not look
+		// top-heavy. A panel taller than the frame is clamped to the block for the
+		// same reason: rows the image block cannot reach are drawn below it.
 		const top = Math.max(0, Math.floor((block - text.length) / 2));
 		const right = (row: number): string => {
 			const index = row - top;
@@ -456,6 +537,17 @@ export class WhalePetWidget implements Component {
 		anchor += `\x1b[${block - 1}A`;
 		lines.push(anchor);
 		for (let row = 1; row < block; row++) lines.push("");
+		// A terminal can size the avatar to fewer rows than the panel needs (tall
+		// or narrow cells, common over SSH and serial links), and the image block
+		// can only ever reserve its own rows. Any panel row the block did not reach
+		// is emitted as an ordinary text line below it; without this the lower rows
+		// were silently dropped and the strip showed only its head. The count stays
+		// fixed at `max(block, text.length)` rows either way, so the strip never
+		// changes height when the frame size shifts.
+		const indent = " ".repeat(textColumn());
+		for (let index = block - top; index < text.length; index++) {
+			lines.push(truncateToWidth(indent + (text[index] as string), width));
+		}
 		return lines;
 	}
 
@@ -506,33 +598,69 @@ export class WhalePetWidget implements Component {
 	}
 
 	/**
-	 * The four-line status panel beside the avatar. Line 1 carries the model, its
-	 * thinking level, and the context window; line 2 the context progress bar;
-	 * line 3 the token/cost totals; line 4 the working directory. Without a
-	 * `stats` snapshot only the model line is drawn, so a host that has not wired
-	 * the data yet degrades to a readable strip instead of a half-empty one.
+	 * The four-line status panel beside the avatar. Everything is inline and
+	 * left-aligned so a wide terminal leaves no dead space between a label and
+	 * its value: identity (`🐳 model · 🔌 provider · 🧠 level`), a fixed-width
+	 * context gauge with its reading beside it, a usage meter, and a location
+	 * row led by the git branch. Without a `stats` snapshot only the identity
+	 * line is drawn, so a host that has not wired the data yet degrades to a
+	 * readable strip instead of a half-empty one.
 	 */
 	private infoLines(width: number, hasAvatar: boolean): string[] {
+		const budget = Math.max(1, width - (hasAvatar ? textColumn() : 0));
 		const { model, thinkingLevel, stats } = this.view;
 		const thinking = this.theme.getThinkingBorderColor(thinkingLevel);
-		let modelLine = model;
-		if (stats?.reasoning) modelLine += ` • ${thinkingLevel}`;
-		if (stats) modelLine += ` • ${formatTokens(stats.contextWindow)}`;
-		const lines = [this.theme.bold(thinking(modelLine))];
+		// Row 1: identity. Provider and level only add their icon when present.
+		const identity = [`🐳 ${model}`];
+		if (stats?.provider) identity.push(`🔌 ${stats.provider}`);
+		if (stats?.reasoning) identity.push(`🧠 ${thinkingLevel}`);
+		const lines = [this.theme.bold(thinking(identity.join(" · ")))];
 		if (stats) {
-			const barColor = resolveProgressColor(stats.contextPercent ?? 0, stats.cacheHitRate);
-			lines.push(this.theme.fg(barColor, buildProgressBar(stats)));
-			lines.push(
-				this.theme.fg(
-					"dim",
-					`↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)} ` +
-						`⇞${stats.cacheHitRate.toFixed(1)}% $${stats.cost.toFixed(3)}`,
-				),
-			);
-			lines.push(this.theme.fg("warning", shortenHome(stats.cwd)));
+			// Row 2: the gauge keeps a fixed width so its reading stays beside it
+			// instead of drifting to the far edge on a wide screen.
+			const percent = stats.contextPercent ?? 0;
+			const color = resolveProgressColor(percent, stats.cacheHitRate ?? 0);
+			const tokens = stats.contextTokens !== null ? formatTokens(stats.contextTokens) : "?";
+			const percentText = stats.contextPercent !== null ? `${percent.toFixed(1)}%` : "?";
+			const reading = `${percentText} · ${tokens}/${formatTokens(stats.contextWindow)}`;
+			const barCells = Math.max(6, Math.min(TIDE_BAR_CELLS, budget - visibleWidth(reading) - 5));
+			const foam =
+				this.view.state === "working"
+					? (TIDE_FOAM_FRAMES[this.index % TIDE_FOAM_FRAMES.length] as string)
+					: "";
+			const gauge = this.theme.fg(color, `[${buildTideBar(stats, barCells, foam)}]`);
+			lines.push(`${gauge} · ${this.theme.fg("dim", reading)}`);
+			// Row 3: usage meter, all inline.
+			lines.push(this.theme.fg("dim", this.usageMeter(stats)));
+			// Row 4: location, branch first because it is the field that changes.
+			lines.push(this.tideLocation(stats));
 		}
-		const budget = Math.max(1, width - (hasAvatar ? textColumn() : 0));
 		return lines.map((line) => truncateToWidth(line, budget));
+	}
+
+	/** `↑in ↓out · R… W… · ⚡hit% · 🍚 cost` for the usage row. */
+	private usageMeter(stats: PetStats): string {
+		const parts = [`↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`];
+		if (stats.cacheRead > 0 || stats.cacheWrite > 0) {
+			parts.push(`R${formatTokens(stats.cacheRead)} W${formatTokens(stats.cacheWrite)}`);
+		}
+		if (stats.cacheHitRate !== null && (stats.cacheRead > 0 || stats.cacheWrite > 0)) {
+			parts.push(`⚡${stats.cacheHitRate.toFixed(1)}%`);
+		}
+		if (stats.cost > 0) parts.push(`🍚 ${stats.cost.toFixed(3)}`);
+		return parts.join(" · ");
+	}
+
+	/** `🪾 branch · 📂 cwd · session · statuses` for the location row. */
+	private tideLocation(stats: PetStats): string {
+		const parts: string[] = [];
+		const branch = this.footerData?.getGitBranch();
+		if (branch) parts.push(this.theme.fg("accent", `🪾 ${branch}`));
+		parts.push(this.theme.fg("dim", `📂 ${shortenHome(stats.cwd)}`));
+		if (stats.sessionName) parts.push(this.theme.fg("muted", stats.sessionName));
+		const statuses = this.footerData ? formatStatuses(this.footerData.getExtensionStatuses()) : "";
+		if (statuses.length > 0) parts.push(this.theme.fg("warning", statuses));
+		return parts.join(" · ");
 	}
 
 	/**
@@ -543,18 +671,30 @@ export class WhalePetWidget implements Component {
 	private arm(): void {
 		if (this.timer !== undefined) clearTimeout(this.timer);
 		this.timer = undefined;
-		if (this.closed || !this.withAvatar) return;
+		if (this.closed) return;
 		const cycle = PET_CYCLES[this.view.state];
-		const frame = cycle[this.index % cycle.length];
-		if (frame === undefined || cycle.length <= 1) return;
+		// A missing frame reference must never be able to strand the loop: fall
+		// back to the first frame so a bad index degrades to a static pose, not a
+		// dead animation.
+		const frame = cycle[this.index % cycle.length] ?? cycle[0];
+		const advancing = this.withAvatar && frame !== undefined && cycle.length > 1;
+		// Text-only strips have no avatar to animate, but the tide waterline still
+		// ripples while a turn runs; that needs its own (slower) timer.
+		const pulsing = !advancing && this.view.state === "working" && this.view.stats !== undefined;
+		if (!advancing && !pulsing) return;
+		const delay = advancing && frame !== undefined ? frame.durationMs : TIDE_PULSE_MS;
 		this.timer = setTimeout(() => {
 			this.timer = undefined;
 			if (this.closed) return;
 			const current = PET_CYCLES[this.view.state];
-			this.index = (this.index + 1) % current.length;
-			this.tui.requestRender();
+			this.index = advancing ? (this.index + 1) % current.length : this.index + 1;
+			// Re-arm *before* requesting the render. `requestRender` is
+			// fire-and-forget: its frame can be coalesced away or throw, and when it
+			// ran before `arm()` a single failure killed the whole frame loop, leaving
+			// the image frozen on its last drawn frame.
 			this.arm();
-		}, frame.durationMs);
+			this.tui.requestRender();
+		}, delay);
 		this.timer.unref?.();
 	}
 }

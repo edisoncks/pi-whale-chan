@@ -44,19 +44,29 @@ running, and vice versa.
 ## What changes
 
 - The way Pi talks: playful, teasing, a little dramatic — and it keeps that voice through long, tool-heavy turns instead of fading into flat assistant prose.
-- Above the editor, a **pet strip**: whale-chan animates beside a four-line
-  status panel — model • thinking level • context window, a context progress
-  bar, cumulative input/output tokens with cache-hit rate and cost, and the
-  working directory. She hugs her pillow and dozes off while idle, and types on a
-  laptop while a turn is running. The strip is framed in the input
-  box's own border colour — which follows the thinking level — with a rule across
-  the top and a divider between the avatar and the panel, so it reads as part of
-  the editor rather than a floating banner. It needs a terminal that speaks the
-  Kitty graphics protocol (Kitty,
-  Ghostty, WezTerm, Rio, Warp); anywhere else
+- Above the editor, a **whale-chan status strip** that replaces Pi's built-in
+  footer: whale-chan animates beside a four-line status panel that groups the
+  session into identity (`🐳` model · `🔌` provider · `🧠` thinking level), a
+  fixed-width context gauge whose waterline ripples while a turn runs, a usage
+  meter (`↑`/`↓` tokens, `R`/`W` cache, `⚡` hit rate, `🍚` cost), and a
+  location row (`🪾` branch · `📂` cwd · session name · `ui.setStatus` entries).
+  Everything is inline and left-aligned, so a wide terminal never flings a
+  value to the far edge. The built-in footer is hidden while the strip is on,
+  so the status lives in one place instead of two. She hugs her pillow and dozes
+  off while idle, and types on a laptop while a turn is running. The strip is
+  framed in the input box's own border colour — which follows the thinking
+  level — with a rule across the top and a divider between the avatar and the
+  panel, so it reads as part of the editor. It needs a terminal that speaks the
+  Kitty graphics protocol (Kitty, Ghostty,
+  WezTerm, Rio, Warp); anywhere else
   it degrades to a text-only status line, because iTerm2's inline-image protocol
   cannot place an animated image beside text without scrambling it. The strip
   is display-only and never enters the model context.
+
+  Three footer fields are **not** mirrored, because Pi does not expose them to
+  extensions: the auto-compaction `(auto)` marker, the subscription `(sub)`
+  marker, and the experimental-features `xp` badge. Turn the strip off
+  (`/whale pet off`) to get the built-in footer back.
 
 ## What doesn't change
 

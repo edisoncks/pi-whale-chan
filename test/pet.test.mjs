@@ -53,18 +53,22 @@ const {
 	DIVIDER_CHAR,
 	PET_CYCLES,
 	RULE_CHAR,
+	TIDE_FOAM_FRAMES,
 	WhalePetWidget,
 	avatarInset,
-	buildProgressBar,
+	buildTideBar,
 	fitCells,
+	formatStatuses,
 	formatTokens,
 	framePath,
 	loadFrame,
 	resolveProgressColor,
+	sanitizeStatusText,
 	stateColumns,
 	textColumn,
 } = await import("../pet.ts");
-const { TuiMainScreen, resetCapabilitiesCache, setCapabilities } = await import("@earendil-works/pi-tui");
+const { TuiMainScreen, resetCapabilitiesCache, setCapabilities, setCellDimensions } =
+	await import("@earendil-works/pi-tui");
 
 /**
  * Alpha bounding box of an 8-bit RGBA, non-interlaced PNG.
@@ -159,10 +163,25 @@ const DEFAULT_STATS = {
 	contextPercent: 1.4,
 	inputTokens: 10_000,
 	outputTokens: 4_600,
+	cacheRead: 14_000,
+	cacheWrite: 200,
 	cacheHitRate: 99.8,
 	cost: 0.003,
 	cwd: join(process.env.HOME ?? "/home/test", "repos", "pi-emote"),
+	sessionName: "session-name",
+	provider: "deepseek",
 };
+
+/** Footer data a live Pi session would hand the factory. */
+function makeFooterData(overrides = {}) {
+	return {
+		getGitBranch: () => "main",
+		getExtensionStatuses: () => new Map(),
+		getAvailableProviderCount: () => 1,
+		onBranchChange: () => () => {},
+		...overrides,
+	};
+}
 
 function makeWidget(view, tui = TUI, theme = THEME) {
 	return new WhalePetWidget(tui, theme, { thinkingLevel: "off", stats: DEFAULT_STATS, ...view });
@@ -418,10 +437,10 @@ test("widget composes the avatar and status side by side with cursor-forward", (
 	assert.match(graphics, /\x1b\[\d+C/, "the divider column is reached with cursor-forward, which never paints");
 	assert.ok(graphics.includes(DIVIDER_CHAR), "a vertical divider separates the avatar from the status");
 	const text = lines.join("\n");
-	assert.match(text, /deepseek-v4\.1-flash/, "the model name is on the strip");
-	assert.match(text, /deepseek-v4\.1-flash • off • 1\.0M/, "model, level, and window share line 1");
-	assert.match(text, /⏵▕/, "the context progress bar is drawn");
-	assert.match(text, /⇞99\.8%/, "the cache hit rate is shown");
+	assert.match(text, /🐳 deepseek-v4\.1-flash/, "the model name leads the identity row");
+	assert.match(text, /🔌 deepseek · 🧠 off/, "provider and level share the identity row");
+	assert.match(text, /1\.4%/, "the context percentage is on the gauge row");
+	assert.match(text, /⚡99\.8%/, "the cache hit rate is shown");
 });
 
 test("a state change restarts the cycle at frame 0 of the new state", () => {
@@ -438,7 +457,7 @@ test("a state change restarts the cycle at frame 0 of the new state", () => {
 	assert.ok(working0.length > 0, "the working-0 asset loads");
 	assert.ok(lines[1]?.includes(working0), "renders working-0, not a leftover idle frame");
 	assert.ok(!lines[1]?.includes(idleAwake), "the previous state's frame is gone");
-	assert.match(lines.join("\n"), /⇞/, "the stats panel survives a state change");
+	assert.match(lines.join("\n"), /⚡/, "the stats panel survives a state change");
 });
 
 test("a state update that changes nothing does not restart the cycle", () => {
@@ -459,8 +478,8 @@ test("non-Kitty terminals get a text-only strip instead of a scrambled image", (
 
 	assert.equal(lines.length, AVATAR_MAX_ROWS + 1, "separator plus the four info lines, no avatar rows");
 	assert.doesNotMatch(lines.join("\n"), /\x1b_G/, "no graphics escape is emitted");
-	assert.match(lines.join("\n"), /m • off • 1\.0M/, "the model line is the fallback");
-	assert.match(lines.join("\n"), /⏵▕/, "the text-only strip still shows the stats panel");
+	assert.match(lines.join("\n"), /🐳 m/, "the identity line is the fallback");
+	assert.match(lines.join("\n"), /1\.4%/, "the text-only strip still shows the stats panel");
 });
 
 test("a long model label is clipped to the strip width, not wrapped", () => {
@@ -493,14 +512,6 @@ test("formatTokens compacts large counts", () => {
 	assert.equal(formatTokens(1_000_000), "1.0M");
 });
 
-test("the context bar is empty at zero and filled past the minimum", () => {
-	const empty = buildProgressBar({ ...DEFAULT_STATS, contextPercent: 0, contextTokens: null });
-	assert.match(empty, /^⏵▕ {20}▏ \? \(0\.0%\)$/, "an empty context draws an empty bar");
-	const half = buildProgressBar({ ...DEFAULT_STATS, contextPercent: 50, cacheHitRate: 0 });
-	assert.match(half, /█/, "a half-full context shows blocks");
-	assert.match(half, /50\.0%/);
-});
-
 test("progress colour prioritises a cold cache, then a nearly-full context", () => {
 	assert.equal(resolveProgressColor(10, 20), "error", "a cold cache is the alarm");
 	assert.equal(resolveProgressColor(80, 90), "warning", "a nearly-full context outranks cache");
@@ -508,15 +519,119 @@ test("progress colour prioritises a cold cache, then a nearly-full context", () 
 	assert.equal(resolveProgressColor(10, 0), "text", "a fresh session stays neutral");
 });
 
-test("the info panel renders the four stat lines", () => {
+test("the tide panel groups identity, gauge, meter, and location", () => {
 	kitty();
-	const widget = makeWidget({ state: "idle", model: "deepseek-v4.1-flash" });
-	const text = widget.render(80).join("\n");
+	const footerData = makeFooterData({
+		getGitBranch: () => "feat/pet-footer",
+		getExtensionStatuses: () => new Map([["a", "α"]]),
+	});
+	const widget = new WhalePetWidget(
+		TUI,
+		THEME,
+		{
+			state: "idle",
+			thinkingLevel: "high",
+			model: "DeepSeek V4.1 Flash",
+			stats: { ...DEFAULT_STATS, provider: "OpenCode Go" },
+		},
+		footerData,
+	);
+	const text = widget.render(120).join("\n");
 	widget.dispose();
-	assert.match(text, /deepseek-v4\.1-flash • off • 1\.0M/, "model, level, and window");
-	assert.match(text, /⏵▕/, "a progress bar");
-	assert.match(text, /↑10K ↓4\.6K ⇞99\.8% \$0\.003/, "token and cost totals");
-	assert.match(text, /~\/repos\/pi-emote/, "the cwd, home-abbreviated");
+	assert.match(text, /🐳 DeepSeek V4\.1 Flash/, "the whale leads the identity row");
+	assert.match(text, /🔌 OpenCode Go · 🧠 high/, "provider and level share the identity row");
+	assert.match(text, /1\.4%/, "the context percentage is on the gauge row");
+	assert.match(text, /⚡99\.8%/, "the cache hit rate uses the bolt");
+	assert.match(text, /🍚 0\.003/, "the cost is the rice counter");
+	assert.match(text, /🪾 feat\/pet-footer/, "the branch leads the location row");
+	assert.match(text, /α/, "extension statuses still ride the location row");
+});
+
+test("a short avatar block pushes the rest of the panel below it", () => {
+	kitty();
+	// Tall, narrow cells scale a square frame to two rows instead of four. The
+	// image block can only ever reserve its own rows, so the panel's lower rows
+	// must fall back to ordinary text below the block instead of vanishing — the
+	// regression that made only the strip's head show over SSH.
+	setCellDimensions({ widthPx: 8, heightPx: 40 });
+	const widget = new WhalePetWidget(TUI, THEME, {
+		state: "working",
+		thinkingLevel: "high",
+		model: "DeepSeek V4.1 Flash",
+		stats: { ...DEFAULT_STATS, provider: "OpenCode Go" },
+	});
+	const lines = widget.render(90);
+	widget.dispose();
+	setCellDimensions({ widthPx: 9, heightPx: 18 });
+	assert.equal(lines.length, 5, "the rule plus one line per panel row, whatever the block height");
+	const text = lines.join("\n");
+	assert.match(text, /1\.4%/, "the gauge survives a short block");
+	assert.match(text, /⚡99\.8%/, "the usage meter survives a short block");
+	assert.match(text, /📂/, "the location row survives a short block");
+});
+
+test("buildTideBar fills, shades cache, and rides the foam", () => {
+	const stats = { ...DEFAULT_STATS, contextPercent: 50, cacheHitRate: 40 };
+	const calm = buildTideBar(stats, 20, "");
+	assert.equal(calm.length, 20, "the bar occupies exactly the requested cells");
+	assert.match(calm, /█/, "fresh input is a full block");
+	assert.match(calm, /░/, "cached prompt is a shade");
+	const foam = buildTideBar(stats, 20, "≈");
+	assert.match(foam, /≈/, "the foam glyph rides the waterline");
+	assert.ok(TIDE_FOAM_FRAMES.includes("≈"), "the foam has a pulse frame");
+});
+
+test("statuses are sorted by key and stripped to one line", () => {
+	assert.equal(sanitizeStatusText(" a\n b\t c "), "a b c", "newlines and tabs fold to single spaces");
+	assert.equal(
+		formatStatuses(new Map([["z", "last"], ["a", "first"], ["m", "   "]])),
+		"first last",
+		"key order is stable and blank statuses drop out",
+	);
+});
+
+test("the cache-hit rate and cost are omitted until there is data", () => {
+	setCapabilities({ images: "iterm2", trueColor: true, hyperlinks: false });
+	const widget = makeWidget({
+		state: "idle",
+		model: "m",
+		stats: { ...DEFAULT_STATS, cacheRead: 0, cacheWrite: 0, cacheHitRate: null, cost: 0 },
+	});
+	const text = widget.render(120).join("\n");
+	widget.dispose();
+	assert.doesNotMatch(text, /⚡/, "no cache-hit rate without a measured prompt");
+	assert.doesNotMatch(text, /🍚/, "no cost when nothing was billed");
+	assert.match(text, /↑10K ↓4\.6K/, "the token totals still render");
+});
+
+test("a branch change asks the TUI to re-render, and dispose stops it", () => {
+	kitty();
+	let onChange;
+	let active = true;
+	const { tui, renders } = makeTui();
+	const footerData = makeFooterData({
+		onBranchChange: (callback) => {
+			onChange = () => {
+				if (active) callback();
+			};
+			return () => {
+				active = false;
+			};
+		},
+	});
+	const widget = new WhalePetWidget(
+		tui,
+		THEME,
+		{ state: "idle", thinkingLevel: "off", model: "m", stats: DEFAULT_STATS },
+		footerData,
+	);
+	const before = renders();
+	onChange();
+	assert.equal(renders(), before + 1, "the branch signal redraws the strip");
+	widget.dispose();
+	const afterDispose = renders();
+	onChange();
+	assert.equal(renders(), afterDispose, "a disposed widget ignores the branch signal");
 });
 
 test("without stats only the model line is drawn", () => {
@@ -525,8 +640,8 @@ test("without stats only the model line is drawn", () => {
 	const lines = widget.render(80);
 	widget.dispose();
 	assert.equal(lines.length, AVATAR_MAX_ROWS + 1, "the avatar still reserves its rows");
-	assert.match(lines.join("\n"), /m/);
-	assert.doesNotMatch(lines.join("\n"), /⏵▕/, "no bar without stats");
+	assert.match(lines.join("\n"), /🐳 m/);
+	assert.doesNotMatch(lines.join("\n"), /🍚/, "no meter without stats");
 });
 
 // --- extension wiring -------------------------------------------------------
@@ -540,13 +655,16 @@ process.env.PI_CODING_AGENT_DIR = sandbox;
 const { default: whaleChan, createUsageAccumulator, accumulateUsage } = await import("../index.ts");
 const STATE_PATH = join(sandbox, "whale-chan.json");
 
-function makeExtensionHarness() {
+function makeExtensionHarness(footerData = makeFooterData()) {
 	// Start every case from defaults: one case writes a preference to disk, and
 	// an order-dependent suite is a trap for whoever adds the next test.
 	rmSync(STATE_PATH, { force: true });
 	const handlers = new Map();
 	const commands = new Map();
 	const widgets = new Map();
+	// `setFooter` stores the factory; `undefined` means Pi's built-in footer is
+	// restored, so a footer-present check is `footers.current !== undefined`.
+	const footers = { current: undefined };
 	const pi = {
 		on(event, handler) {
 			handlers.set(event, handler);
@@ -560,7 +678,10 @@ function makeExtensionHarness() {
 	whaleChan(pi);
 	const ctx = {
 		mode: "tui",
-		model: { id: "m", name: "M" },
+		model: { id: "m", name: "M", provider: "opencode-go" },
+		modelRegistry: {
+			getProviderDisplayName: (provider) => (provider === "opencode-go" ? "OpenCode Go" : provider),
+		},
 		thinkingLevel: "off",
 		ui: {
 			notify() {},
@@ -568,25 +689,37 @@ function makeExtensionHarness() {
 				if (content === undefined) widgets.delete(key);
 				else widgets.set(key, content);
 			},
+			setFooter(factory) {
+				footers.current = factory;
+			},
 		},
 	};
-	return { handlers, commands, widgets, ctx };
+	return { handlers, commands, widgets, footers, footerData, ctx };
 }
 
-function mount(widgets, theme = THEME) {
+/**
+ * Mount the strip the way Pi does: `setFooter` invokes its factory immediately,
+ * which is what lets the extension capture the footer data before the widget
+ * factory runs. The strip stays a widget above the editor; the footer is the
+ * empty component that replaces the built-in one.
+ */
+function mount({ widgets, footers, footerData }, theme = THEME) {
+	assert.ok(footers.current !== undefined, "the strip hides the built-in footer");
+	const empty = footers.current(TUI, theme, footerData);
+	assert.deepEqual(empty.render(80), [], "the replacement footer draws nothing");
 	const factory = widgets.get("whale_pet");
-	assert.ok(factory !== undefined, "the strip is mounted");
+	assert.ok(factory !== undefined, "the strip is mounted above the editor");
 	return factory(TUI, theme);
 }
 
 test("the strip mounts on session_start and follows the agent lifecycle", async () => {
 	kitty();
-	const { handlers, widgets, ctx } = makeExtensionHarness();
+	const { handlers, widgets, footers, footerData, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
+	assert.ok(widgets.has("whale_pet"), "the strip mounts above the editor, not in the footer");
 
-	const widget = mount(widgets);
-	assert.match(widget.render(80).join("\n"), /M/, "the model name is on the strip");
-	assert.match(widget.render(80).join("\n"), /⏵▕/, "the stats panel is drawn");
+	const widget = mount({ widgets, footers, footerData });
+	assert.match(widget.render(80).join("\n"), /🐳 M/, "the tide identity row is on the strip");
 
 	await handlers.get("agent_start")({ type: "agent_start" }, ctx);
 	assert.ok(
@@ -606,7 +739,7 @@ test("the strip mounts on session_start and follows the agent lifecycle", async 
 
 test("a thinking-level change recolours the separator through the real extension", async () => {
 	kitty();
-	const { handlers, widgets, ctx } = makeExtensionHarness();
+	const { handlers, widgets, footers, footerData, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	const levels = [];
@@ -617,7 +750,7 @@ test("a thinking-level change recolours the separator through the real extension
 			return (text) => `<${level}>${text}</${level}>`;
 		},
 	};
-	const widget = mount(widgets, theme);
+	const widget = mount({ widgets, footers, footerData }, theme);
 	await handlers.get("thinking_level_select")(
 		{ type: "thinking_level_select", level: "high", previousLevel: "off" },
 		ctx,
@@ -630,14 +763,16 @@ test("a thinking-level change recolours the separator through the real extension
 	widget.dispose();
 });
 
-test("/whale pet off unmounts the strip and pet on brings it back", async () => {
+test("/whale pet off restores the built-in footer and pet on brings the strip back", async () => {
 	kitty();
-	const { handlers, commands, widgets, ctx } = makeExtensionHarness();
+	const { handlers, commands, widgets, footers, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
-	assert.ok(widgets.has("whale_pet"), "the strip starts mounted (pet defaults to on)");
+	assert.ok(widgets.has("whale_pet"), "the strip starts mounted above the editor");
+	assert.ok(footers.current !== undefined, "the built-in footer is hidden (pet defaults to on)");
 
 	await commands.get("whale").handler("pet off", ctx);
 	assert.ok(!widgets.has("whale_pet"), "off unmounts the strip");
+	assert.ok(footers.current === undefined, "off restores the built-in footer");
 	assert.equal(
 		JSON.parse(readFileSync(STATE_PATH, "utf8")).pet,
 		false,
@@ -646,24 +781,51 @@ test("/whale pet off unmounts the strip and pet on brings it back", async () => 
 
 	await commands.get("whale").handler("pet on", ctx);
 	assert.ok(widgets.has("whale_pet"), "on remounts the strip");
+	assert.ok(footers.current !== undefined, "and hides the built-in footer again");
 });
 
 test("the persona toggle leaves the pet strip alone", async () => {
 	kitty();
-	const { handlers, commands, widgets, ctx } = makeExtensionHarness();
+	const { handlers, commands, widgets, footers, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	await commands.get("whale").handler("off", ctx);
 	assert.ok(widgets.has("whale_pet"), "the two switches are independent");
+	assert.ok(footers.current !== undefined, "persona off keeps the footer hidden");
 	assert.equal(JSON.parse(readFileSync(STATE_PATH, "utf8")).pet, true, "persona off keeps pet on");
 });
 
 test("a disabled pet preference never mounts the strip", async () => {
 	kitty();
-	const { handlers, widgets, commands, ctx } = makeExtensionHarness();
+	const { handlers, widgets, footers, commands, ctx } = makeExtensionHarness();
 	await commands.get("whale").handler("pet off", ctx);
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 	assert.ok(!widgets.has("whale_pet"), "the persisted preference is honoured on the next session");
+	assert.ok(footers.current === undefined, "and the built-in footer stays");
+});
+
+test("the strip above the editor carries the footer's git branch", async () => {
+	kitty();
+	const footerData = makeFooterData({ getGitBranch: () => "feat/pet-footer" });
+	const { handlers, widgets, footers, ctx } = makeExtensionHarness(footerData);
+	await handlers.get("session_start")({ type: "session_start" }, ctx);
+
+	const widget = mount({ widgets, footers, footerData });
+	assert.match(widget.render(120).join("\n"), /🪾 feat\/pet-footer/, "footerData reaches the widget");
+	widget.dispose();
+});
+
+test("the strip shows the provider display name, not its id", async () => {
+	kitty();
+	const footerData = makeFooterData({ getAvailableProviderCount: () => 2 });
+	const { handlers, widgets, footers, ctx } = makeExtensionHarness(footerData);
+	await handlers.get("session_start")({ type: "session_start" }, ctx);
+
+	const widget = mount({ widgets, footers, footerData });
+	const text = widget.render(120).join("\n");
+	assert.match(text, /OpenCode Go/, "the provider display name is shown");
+	assert.doesNotMatch(text, /opencode-go/, "the raw provider id is not");
+	widget.dispose();
 });
 
 test("usage totals accumulate incrementally and rebuild on a session change", () => {
@@ -711,5 +873,6 @@ after(() => {
 	// setCapabilities() writes pi-tui's shared capability cache; drop it so a
 	// later consumer in this process re-detects instead of inheriting the stub.
 	resetCapabilitiesCache();
+	setCellDimensions({ widthPx: 9, heightPx: 18 });
 	rmSync(sandbox, { recursive: true, force: true });
 });

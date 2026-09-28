@@ -23,10 +23,12 @@
  *   It is a pure append, so it cannot invalidate the cached prefix. (A second,
  *   tool-result anchor was tried and removed: it showed no measurable effect —
  *   see eval/README.md.)
- * - The pet strip is display-only: it is an extension widget
- *   above the editor, driven by agent lifecycle events, and it never calls
- *   `sendMessage`/`appendEntry`. It has its own `/whale pet` switch because it
- *   is a display preference rather than part of the persona.
+ * - The pet strip is display-only: it sits above the editor as an extension
+ *   widget and replaces Pi's built-in footer by mounting an empty footer (so
+ *   the strip, not the footer, owns the status line). It is driven by agent
+ *   lifecycle events and never calls `sendMessage`/`appendEntry`. It has its
+ *   own `/whale pet` switch because it is a display preference rather than part
+ *   of the persona.
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -38,12 +40,26 @@ import {
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { WHALE_PERSONA, WHALE_VOICE_RULE, WHALE_TAIL_ANCHOR } from "./persona.js";
-import { WhalePetWidget, type PetStats } from "./pet.js";
+import { WhalePetWidget, type PetFooterData, type PetStats } from "./pet.js";
 
 const SECTION_NAME = "whale_persona";
 const STATE_FILE = "whale-chan.json";
 /** Widget key for the animated pet strip above the editor. */
 const PET_WIDGET_KEY = "whale_pet";
+
+/**
+ * Renders nothing. Mounted as Pi's footer while the strip is on, so the built-in
+ * footer's status surface is replaced by the strip above the editor rather than
+ * duplicated below it. `ctx.ui.setFooter(undefined)` restores the real footer.
+ * This is the pattern from Pi's own `border-status-editor.ts` example.
+ */
+class EmptyFooter {
+	render(): string[] {
+		return [];
+	}
+
+	invalidate(): void {}
+}
 
 /**
  * Mechanism switches — ablation only. Production (Pi) calls the factory with one
@@ -80,7 +96,7 @@ function statePath(): string | null {
 export interface WhaleConfig {
 	/** Whether the persona is injected into the system prompt. */
 	enabled: boolean;
-	/** Whether the animated pet strip is shown above the editor. */
+	/** Whether the animated pet strip is shown above the editor, replacing the built-in footer. */
 	pet: boolean;
 }
 
@@ -149,6 +165,26 @@ function modelLabel(model: ExtensionContext["model"]): string {
 	return model?.name ?? model?.id ?? "unknown";
 }
 
+/** Session name for the location line; absent or unreadable degrades to null. */
+function sessionNameLabel(ctx: PetContext): string | null {
+	try {
+		return ctx.sessionManager?.getSessionName() ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/** Provider display name for the strip (`OpenCode Go`), raw id as the fallback. */
+function providerLabel(ctx: PetContext): string {
+	const provider = ctx.model?.provider;
+	if (!provider) return "unknown";
+	try {
+		return ctx.modelRegistry?.getProviderDisplayName(provider) ?? provider;
+	} catch {
+		return provider;
+	}
+}
+
 /**
  * The slice of `ExtensionContext` the pet panel reads. Every stats source is
  * optional, so a stub runtime that only exposes `ui`/`model` still mounts the
@@ -157,6 +193,7 @@ function modelLabel(model: ExtensionContext["model"]): string {
 type PetContext = {
 	ui: ExtensionUIContext;
 	model: ExtensionContext["model"];
+	modelRegistry?: ExtensionContext["modelRegistry"];
 	thinkingLevel?: ExtensionContext["thinkingLevel"];
 	getContextUsage?: ExtensionContext["getContextUsage"];
 	sessionManager?: ExtensionContext["sessionManager"];
@@ -170,13 +207,24 @@ interface UsageTotals {
 	inputTokens: number;
 	outputTokens: number;
 	cost: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
 	latestInput: number;
 	latestCacheRead: number;
 	latestCacheWrite: number;
 }
 
 function emptyUsage(): UsageTotals {
-	return { inputTokens: 0, outputTokens: 0, cost: 0, latestInput: 0, latestCacheRead: 0, latestCacheWrite: 0 };
+	return {
+		inputTokens: 0,
+		outputTokens: 0,
+		cost: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+		latestInput: 0,
+		latestCacheRead: 0,
+		latestCacheWrite: 0,
+	};
 }
 
 /**
@@ -228,6 +276,8 @@ export function accumulateUsage(acc: UsageAccumulator, manager: SessionManager |
 		acc.totals.inputTokens += messageUsage.input ?? 0;
 		acc.totals.outputTokens += messageUsage.output ?? 0;
 		acc.totals.cost += messageUsage.cost?.total ?? 0;
+		acc.totals.cacheReadTokens += messageUsage.cacheRead ?? 0;
+		acc.totals.cacheWriteTokens += messageUsage.cacheWrite ?? 0;
 		acc.totals.latestInput = messageUsage.input ?? 0;
 		acc.totals.latestCacheRead = messageUsage.cacheRead ?? 0;
 		acc.totals.latestCacheWrite = messageUsage.cacheWrite ?? 0;
@@ -255,9 +305,13 @@ function petStats(ctx: PetContext, acc: UsageAccumulator): PetStats {
 		contextPercent: usage?.percent ?? null,
 		inputTokens: totals.inputTokens,
 		outputTokens: totals.outputTokens,
-		cacheHitRate: promptTokens > 0 ? (totals.latestCacheRead / promptTokens) * 100 : 0,
+		cacheRead: totals.cacheReadTokens,
+		cacheWrite: totals.cacheWriteTokens,
+		cacheHitRate: promptTokens > 0 ? (totals.latestCacheRead / promptTokens) * 100 : null,
 		cost: totals.cost,
 		cwd: ctx.cwd ?? process.cwd(),
+		sessionName: sessionNameLabel(ctx),
+		provider: providerLabel(ctx),
 	};
 }
 
@@ -271,14 +325,19 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	// strip is unmounted. That factory runs once per mount, so this stays the
 	// single live instance the lifecycle handlers poke.
 	let petWidget: WhalePetWidget | null = null;
+	// Footer-owned data (git branch, `ui.setStatus` entries, provider count). It
+	// is only reachable from the `setFooter` factory, so that factory stores it
+	// and the widget above the editor reads it.
+	let petFooterData: PetFooterData | undefined;
 	// Incremental token/cost fold for the status panel. One per extension
 	// instance; the accumulator rebuilds itself when the session changes.
 	const usageAcc = createUsageAccumulator();
 
-	// The pet is UI-only: it renders in Pi's widget container above the editor and
-	// never touches the prompt. `setWidget` with a factory is the documented path
-	// for persistent content near the editor, and its default placement is
-	// `aboveEditor` — exactly the status strip we want.
+	// The pet is UI-only and never touches the prompt. It keeps its original
+	// spot *above the editor* (as a widget); to make it *replace* the built-in
+	// footer, a separate empty footer is mounted so the footer's status surface
+	// is not duplicated below. Pi invokes the `setFooter` factory synchronously,
+	// so `petFooterData` is captured before the widget factory below reads it.
 	const mountPet = (ctx: PetContext): void => {
 		if (petWidget !== null) {
 			// A second session_start without a shutdown should re-point the live
@@ -290,13 +349,22 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 			});
 			return;
 		}
+		ctx.ui.setFooter((_tui, _theme, footerData) => {
+			petFooterData = footerData;
+			return new EmptyFooter();
+		});
 		ctx.ui.setWidget(PET_WIDGET_KEY, (tui, theme) => {
-			const widget = new WhalePetWidget(tui, theme, {
-				state: "idle",
-				model: modelLabel(ctx.model),
-				thinkingLevel: ctx.thinkingLevel ?? "off",
-				stats: petStats(ctx, usageAcc),
-			});
+			const widget = new WhalePetWidget(
+				tui,
+				theme,
+				{
+					state: "idle",
+					model: modelLabel(ctx.model),
+					thinkingLevel: ctx.thinkingLevel ?? "off",
+					stats: petStats(ctx, usageAcc),
+				},
+				petFooterData,
+			);
 			petWidget = widget;
 			return widget;
 		});
@@ -304,10 +372,13 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 
 	// Pi disposes the component itself when a widget is replaced or cleared; we
 	// dispose first only so the frame timer is cancelled before the swap.
+	// Clearing the widget and restoring the footer takes Pi's built-in footer
+	// back.
 	const unmountPet = (ctx: { ui: ExtensionUIContext }): void => {
 		petWidget?.dispose();
 		petWidget = null;
 		ctx.ui.setWidget(PET_WIDGET_KEY, undefined);
+		ctx.ui.setFooter(undefined);
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -366,9 +437,22 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 		petWidget?.update({ model: modelLabel(ctx.model), stats: petStats(ctx, usageAcc) });
 	});
 
-	pi.on("session_shutdown", () => {
+	// The session name is edited live (via `/name` or the session picker) and it
+	// rides on the location line, so refresh the panel when it changes.
+	pi.on("session_info_changed", (_event, ctx) => {
+		petWidget?.update({ stats: petStats(ctx, usageAcc) });
+	});
+
+	pi.on("session_shutdown", (_event, ctx) => {
 		petWidget?.dispose();
 		petWidget = null;
+		// The widget and the hidden-footer state belong to the old session; drop
+		// both so a switch back starts from the real footer.
+		if (ctx.mode === "tui") {
+			ctx.ui.setWidget(PET_WIDGET_KEY, undefined);
+			ctx.ui.setFooter(undefined);
+			petFooterData = undefined;
+		}
 	});
 
 	// Section patch, not prompt replacement: Pi diffs sections and appends only
