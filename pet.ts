@@ -13,22 +13,32 @@
  * `src/client/idle-animation.json` and `src/client/assets.ts`; see
  * ASSET_ATTRIBUTION.md for the license and the list of modifications.
  *
- * ## Why the layout is hand-composed instead of using `HStack`
+ * ## Why the avatar is one single-row image per strip line
  *
  * `Image.render()` returns the Kitty/iTerm2 escape sequence on one line and
- * blank lines for the remaining rows. A stripped escape sequence has an
- * *visible width of zero*, so `HStack` believes the avatar is zero cells wide
- * and would place the status text on top of the artwork.
+ * blank lines for the remaining rows. A stripped escape sequence has a *visible
+ * width of zero*, so `HStack` believes the avatar is zero cells wide and would
+ * place the status text on top of the artwork. The text column is therefore
+ * reserved by hand with a CSI cursor-forward (`ESC[nC`) rather than spaces,
+ * because cursor-forward moves the cursor without painting and can never
+ * overwrite an image cell.
  *
- * Two consequences drive the code below:
+ * The avatar used to be a single four-row Kitty image anchored on the first
+ * strip line, with the panel drawn *inside* that line via relative cursor
+ * movement. That works in Pi's regular (main-screen) renderer, which reserves a
+ * multi-row image as one block, but not in its fullscreen (alt-screen) renderer:
+ * the alt-screen clears each row individually before drawing it, and clearing a
+ * covered row detaches the image's lower cells (WezTerm erases them outright),
+ * leaving only the avatar's head. Over SSH the strip is only four rows tall, so
+ * the panel rows were the ones being cleared and the whole strip collapsed to
+ * its first line.
  *
- * 1. The avatar's cell width is computed here (`fitCells`, mirroring pi-tui's
- *    unexported `calculateImageCellSize`) and the text column is reserved by
- *    hand.
- * 2. The column is reserved with a CSI cursor-forward (`ESC[nC`) rather than
- *    spaces. Cursor-forward moves the cursor without painting, so it can never
- *    overwrite an image cell. Printing spaces would repaint the avatar's anchor
- *    row with the terminal background.
+ * The avatar is therefore split into `AVATAR_MAX_ROWS` one-row images, one per
+ * strip line, each a source-cropped slice of the same frame. A one-row image
+ * cannot be erased by a neighbouring row's clear, so the strip renders the same
+ * in regular and fullscreen mode. The slices are transmitted with the Kitty
+ * source-rectangle keys (`y`/`h`); the first line uploads the frame and the rest
+ * place it with a different crop and placement id, so the payload is sent once.
  *
  * iTerm2 needs no such care because pi-tui anchors its inline images on the
  * *last* row (it moves the cursor up and draws), which would paint over any
@@ -45,7 +55,6 @@ import {
 	getCapabilities,
 	getCellDimensions,
 	getPngDimensions,
-	Image,
 	truncateToWidth,
 	visibleWidth,
 	type Component,
@@ -199,14 +208,6 @@ export const DIVIDER_CHAR = "│";
 /** Columns between the avatar's last cell and the status text: divider + blank. */
 const DIVIDER_COLUMNS = 2;
 
-/**
- * First two bytes of a Kitty graphics escape. pi-tui's own (unexported)
- * `isImageLine` keys off this prefix to recognise a line that carries an image;
- * the widget re-checks it to confirm `Image.render` actually emitted a frame,
- * rather than trusting the blank tail that follows the escape.
- */
-const KITTY_ESCAPE_PREFIX = "\x1b_G";
-
 const frameCache = new Map<string, string | null>();
 
 /** Absolute path of a frame asset; exported for tests. */
@@ -252,6 +253,74 @@ export function fitCells(
 		columns: Math.max(1, Math.min(AVATAR_MAX_COLUMNS, columns)),
 		rows: Math.max(1, Math.min(AVATAR_MAX_ROWS, rows)),
 	};
+}
+
+/**
+ * Source rows for the one-row image slices of an avatar frame. The frame is cut
+ * top-to-bottom into `count` bands; the sum of the band heights is the frame
+ * height, so the slices tile the artwork without gaps or overlap.
+ */
+export function bandRows(heightPx: number, count: number): Array<{ y: number; height: number }> {
+	const rows: Array<{ y: number; height: number }> = [];
+	for (let index = 0; index < count; index++) {
+		const top = Math.floor((heightPx * index) / count);
+		const bottom = Math.floor((heightPx * (index + 1)) / count);
+		rows.push({ y: top, height: Math.max(1, bottom - top) });
+	}
+	return rows;
+}
+
+/**
+ * Encode a Kitty command whose payload is a chunked base64 image. Mirrors
+ * pi-tui's own `encodeKitty`: payloads over 4096 base64 characters are split
+ * across `m=1`/`m=0` continuations, which is what makes a full PNG fit an
+ * escape without hitting a terminal's line length limit.
+ */
+function kittyChunks(params: string[], base64: string): string {
+	const CHUNK = 4096;
+	if (base64.length <= CHUNK) return `\x1b_G${params.join(",")};${base64}\x1b\\`;
+	const chunks: string[] = [];
+	let offset = 0;
+	let first = true;
+	while (offset < base64.length) {
+		const chunk = base64.slice(offset, offset + CHUNK);
+		const last = offset + CHUNK >= base64.length;
+		if (first) {
+			chunks.push(`\x1b_G${params.join(",")},m=1;${chunk}\x1b\\`);
+			first = false;
+		} else if (last) {
+			chunks.push(`\x1b_Gm=0;${chunk}\x1b\\`);
+		} else {
+			chunks.push(`\x1b_Gm=1;${chunk}\x1b\\`);
+		}
+		offset += CHUNK;
+	}
+	return chunks.join("");
+}
+
+/**
+ * One Kitty escape per avatar row. The first row transmits the frame and places
+ * the top band; the remaining rows are placement-only commands (`a=p`) that
+ * reuse the uploaded data with a different source rectangle and placement id, so
+ * the strip ships the PNG once per frame instead of once per row.
+ *
+ * The image is a *single* row (`r=1`) on every line. That is the whole point:
+ * Pi's fullscreen renderer clears each row separately, and a clear on a covered
+ * row erases the multi-row image cells beneath it — the bug that truncated the
+ * strip to its head. A one-row image only ever covers its own row.
+ */
+export function buildBandEscapes(
+	base64: string,
+	heightPx: number,
+	columns: number,
+	imageId: number,
+): string[] {
+	const width = Math.max(1, Math.min(columns, AVATAR_MAX_COLUMNS));
+	return bandRows(heightPx, AVATAR_MAX_ROWS).map((range, index) => {
+		const controls = [`c=${width}`, "r=1", `i=${imageId}`, `y=${range.y}`, `h=${range.height}`, `p=${index}`];
+		if (index === 0) return kittyChunks(["a=T", "f=100", "q=2", "C=1", ...controls], base64);
+		return `\x1b_G${["a=p", "q=2", "C=1", ...controls].join(",")}\x1b\\`;
+	});
 }
 
 /**
@@ -406,12 +475,14 @@ export class WhalePetWidget implements Component {
 	private readonly tui: TUI;
 	private readonly theme: PetTheme;
 	/**
-	 * One Kitty image id shared by every frame. Reusing the id makes the
-	 * terminal *replace* the placed image instead of accumulating one per frame;
-	 * pi-tui's `imageId` option documents exactly this animation use.
+	 * One Kitty image id per frame asset. Each strip line is a distinct placement
+	 * of that image (see `buildBandEscapes`); sharing the id lets the terminal
+	 * replace the frame's pixels in place instead of accumulating one image per
+	 * animation tick.
 	 */
-	private readonly imageId = allocateImageId();
-	private readonly images = new Map<string, Image>();
+	private readonly bandIds = new Map<string, number>();
+	/** Rendered band escapes, keyed by `asset@columns` so a resize recomputes. */
+	private readonly bandCache = new Map<string, string[]>();
 	private readonly withAvatar: boolean;
 	/**
 	 * Footer-owned data (git branch, `ui.setStatus` entries, provider count).
@@ -463,11 +534,14 @@ export class WhalePetWidget implements Component {
 		if (this.timer !== undefined) clearTimeout(this.timer);
 		this.timer = undefined;
 		this.unsubscribeBranch?.();
-		this.images.clear();
+		this.bandIds.clear();
+		this.bandCache.clear();
 	}
 
 	invalidate(): void {
-		for (const image of this.images.values()) image.invalidate();
+		// Band escapes bake in the terminal's cell dimensions, which a resize can
+		// change. Drop them so the next render re-crops against the current size.
+		this.bandCache.clear();
 		// `stateColumns` is derived from the terminal's cell dimensions, which a
 		// resize can change. Drop it so the next render reserves columns against
 		// the current cell size instead of the pre-resize one.
@@ -477,13 +551,9 @@ export class WhalePetWidget implements Component {
 	render(width: number): string[] {
 		const cycle = PET_CYCLES[this.view.state];
 		const frame = cycle[this.index % cycle.length];
-		const avatar = this.withAvatar && frame !== undefined ? this.avatarLines(frame.asset, width) : [];
-		// `Image.render` returns the graphics escape on its first line and blanks for
-		// the rest (see the module header). Guard that contract: a first line without
-		// the escape means no frame was drawn, and a divider beside the blank tail
-		// would be a half-empty strip. Degrade to the text-only layout instead of
-		// trusting a shape a future pi-tui might stop producing.
-		const hasAvatar = avatar.length > 0 && (avatar[0] ?? "").includes(KITTY_ESCAPE_PREFIX);
+		// A missing asset degrades to the text-only strip instead of a half-empty
+		// one, exactly as a terminal without the Kitty protocol does.
+		const hasAvatar = this.withAvatar && frame !== undefined && loadFrame(frame.asset) !== null;
 		// One colour lookup per render: the editor recolours its border whenever
 		// the thinking level changes, and every rule in the strip follows it.
 		const color = this.borderColor();
@@ -500,53 +570,24 @@ export class WhalePetWidget implements Component {
 			for (const line of text) lines.push(line);
 			return lines;
 		}
-		// Centre the frame inside a fixed slot. Frames are normalised to a square
-		// canvas so every pose occupies the same number of columns, and the
-		// centring keeps the gap to the divider symmetric and state-independent.
-		const offset = avatarInset(stateColumns(this.view.state));
-		// The reserved block is exactly the image's own row count: that is what
-		// pi-tui reads back out of the escape to decide how many rows to clear and
-		// redraw atomically. Every cursor step and blank line below is measured in
-		// `block`, never in the panel, so the two can never disagree even if a future
-		// status line grew past the frame. A trailing line beyond the block would be
-		// treated as ordinary text, cleared with `ESC[2K`, and the "stuck head" bug
-		// would return.
-		const block = avatar.length;
-		// Center the status block against the avatar so the strip does not look
-		// top-heavy. A panel taller than the frame is clamped to the block for the
-		// same reason: rows the image block cannot reach are drawn below it.
-		const top = Math.max(0, Math.floor((block - text.length) / 2));
-		const right = (row: number): string => {
-			const index = row - top;
-			return index >= 0 && index < text.length ? (text[index] as string) : "";
-		};
-		// The frame is a *multi-row* Kitty image anchored on one line, but pi-tui
-		// only treats it as a block when the lines *after* it are empty: it then
-		// clears those rows itself and draws the frame across them. With panel text
-		// on those rows, pi-tui clears each row individually (ESC[2K), which detaches
-		// the image from their cells and leaves only its top row — the "stuck head"
-		// bug. So the panel is drawn by cursor movement *inside* the anchor line and
-		// the trailing lines are left empty, keeping the block reserved and redrawn
-		// atomically. (`Image.render` already returns blanks after the escape, so
-		// those lines only need to exist, not to repeat the sequence.)
-		let anchor = " ".repeat(offset) + (avatar[0] ?? "");
-		anchor += `\x1b[${AVATAR_SLOT_COLUMNS - offset}C` + divider + " " + right(0);
-		for (let row = 1; row < block; row++) {
-			anchor += `\x1b[1B\r\x1b[${AVATAR_SLOT_COLUMNS}C` + divider + " " + right(row);
-		}
-		anchor += `\x1b[${block - 1}A`;
-		lines.push(anchor);
-		for (let row = 1; row < block; row++) lines.push("");
-		// A terminal can size the avatar to fewer rows than the panel needs (tall
-		// or narrow cells, common over SSH and serial links), and the image block
-		// can only ever reserve its own rows. Any panel row the block did not reach
-		// is emitted as an ordinary text line below it; without this the lower rows
-		// were silently dropped and the strip showed only its head. The count stays
-		// fixed at `max(block, text.length)` rows either way, so the strip never
-		// changes height when the frame size shifts.
-		const indent = " ".repeat(textColumn());
-		for (let index = block - top; index < text.length; index++) {
-			lines.push(truncateToWidth(indent + (text[index] as string), width));
+		// One single-row image per strip line, never one multi-row image across
+		// them: Pi's fullscreen renderer clears each row before drawing it, and
+		// that clear erases the cells a multi-row image occupies on the rows below
+		// its anchor (WezTerm erases them, other terminals detach them). Keeping
+		// the image to its own row makes the strip identical in regular and
+		// fullscreen mode. `buildBandEscapes` explains the cropping.
+		const columns = stateColumns(this.view.state);
+		const offset = avatarInset(columns);
+		const bands = this.bandEscapes(frame.asset, columns);
+		for (let row = 0; row < AVATAR_MAX_ROWS; row++) {
+			const band = bands[row] ?? "";
+			const body = text[row] ?? "";
+			// The centring inset is printed *before* the image escape, so it never
+			// paints over an image cell; the divider is then reached with
+			// cursor-forward, which also paints nothing.
+			let line = " ".repeat(offset) + band;
+			line += `\x1b[${AVATAR_SLOT_COLUMNS - offset}C` + divider + " " + body;
+			lines.push(line);
 		}
 		return lines;
 	}
@@ -572,29 +613,26 @@ export class WhalePetWidget implements Component {
 		return color(RULE_CHAR.repeat(Math.max(1, width)));
 	}
 
-	private avatarLines(asset: string, width: number): string[] {
-		if (loadFrame(asset) === null) return [];
-		return this.imageFor(asset).render(width);
+	private bandId(asset: string): number {
+		const cached = this.bandIds.get(asset);
+		if (cached !== undefined) return cached;
+		const id = allocateImageId();
+		this.bandIds.set(asset, id);
+		return id;
 	}
 
-	/** One `Image` per asset: `Image` caches its own rendered lines per width. */
-	private imageFor(asset: string): Image {
-		const cached = this.images.get(asset);
+	/** One single-row, source-cropped image per avatar row. */
+	private bandEscapes(asset: string, columns: number): string[] {
+		const key = `${asset}@${columns}`;
+		const cached = this.bandCache.get(key);
 		if (cached !== undefined) return cached;
 		const data = loadFrame(asset);
-		const image = new Image(
-			data ?? "",
-			"image/png",
-			{ fallbackColor: (text) => this.theme.fg("muted", text) },
-			{
-				maxWidthCells: AVATAR_MAX_COLUMNS,
-				maxHeightCells: AVATAR_MAX_ROWS,
-				filename: framePath(asset),
-				imageId: this.imageId,
-			},
-		);
-		this.images.set(asset, image);
-		return image;
+		if (data === null) return [];
+		const dims = getPngDimensions(data);
+		if (dims === null) return [];
+		const escapes = buildBandEscapes(data, dims.heightPx, columns, this.bandId(asset));
+		this.bandCache.set(key, escapes);
+		return escapes;
 	}
 
 	/**
