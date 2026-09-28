@@ -26,7 +26,7 @@ the desired sections against the ones the model already has and sends a patch
 |---|---|
 | `index.ts` | Config load/save, `before_agent_start` section injection, tail anchor, pet strip lifecycle, `/whale` command |
 | `persona.ts` | Frozen persona (`WHALE_PERSONA`) plus the voice rule and tail anchor (`WHALE_VOICE_RULE`, `WHALE_TAIL_ANCHOR`) |
-| `pet.ts` | Frame tables and `WhalePetWidget` — the animated strip that replaces the built-in footer |
+| `pet.ts` | Frame tables and `WhalePetWidget` — the animated strip above the editor |
 
 ## Design decisions
 
@@ -157,13 +157,17 @@ rather than guessing the language by script.
 
 ### Why the pet strip is hand-composed
 
-`ctx.ui.setFooter()` is the documented path for replacing Pi's built-in footer,
-and a footer is the right slot for a persistent status surface: Pi disposes the
-previous component when the factory is replaced or cleared, hands the factory a
-`footerData` provider for the git branch and `ui.setStatus` entries, and
-`setFooter(undefined)` restores the built-in footer when the pet is switched off.
-Three pi-tui properties decide the rendering strategy, and each one is a trap
-that a naive `HStack(Image, Text)` walks straight into:
+`ctx.ui.setWidget()` keeps the strip in its original spot *above the editor*, so
+its position never moves. To make it *replace* Pi's built-in footer rather than
+sit above a second status panel, `ctx.ui.setFooter()` mounts an *empty*
+component (the pattern from Pi's `border-status-editor.ts` example), and
+`setFooter(undefined)` restores the real footer when the pet is switched off.
+The footer factory is also the only place Pi hands over the footer data provider
+— git branch, `ui.setStatus` entries, provider count — so the factory captures
+it for the widget above to read; Pi invokes that factory synchronously, so the
+capture is in place before the widget factory runs. Three pi-tui properties
+decide the rendering strategy, and each one is a trap that a naive
+`HStack(Image, Text)` walks straight into:
 
 - **The image reports zero visible width.** `Image.render()` returns the Kitty
 escape sequence on one line and blank lines for the rest; a stripped escape
@@ -233,9 +237,9 @@ map blocks a deep import). Reaching them would mean reading Pi private state;
 the strip stays on the public API instead, and `/whale pet off` restores the
 built-in footer for anyone who needs them.
 
-**Why the frame timer lives in the component.** `setExtensionFooter` calls the
+**Why the frame timer lives in the component.** `setExtensionWidget` calls the
 factory once and keeps the returned component, and it calls `dispose()` when the
-footer is replaced or cleared. A component-owned timer is therefore the only
+widget is replaced or cleared. A component-owned timer is therefore the only
 place a frame loop can live. The timer is `unref()`'d so a pending frame can
 never keep Pi from exiting.
 
@@ -341,13 +345,14 @@ state across restarts.
 7. The tail anchor is a pure append and never touches the system prompt:
    `WHALE_TAIL_ANCHOR` is appended only when the last message is a tool result.
    It is a frozen constant.
-8. The pet strip is display-only: it replaces Pi's built-in footer via
-   `ctx.ui.setFooter`, is updated only by lifecycle events, and never calls
-   `sendMessage`/`appendEntry`. Its frame timer is `unref()`'d, its
-   `footerData.onBranchChange` subscription and timer are cleared in `dispose()`,
-   and `setFooter(undefined)` restores the built-in footer. Frame data is copied
-   from the upstream source; the strip performs no IO beyond reading its own
-   committed assets.
+8. The pet strip is display-only: it is mounted above the editor via
+   `ctx.ui.setWidget`, and Pi's built-in footer is replaced by an empty
+   `ctx.ui.setFooter` component so the status lives in one place. It is updated
+   only by lifecycle events and never calls `sendMessage`/`appendEntry`. Its
+   frame timer is `unref()`'d, its `footerData.onBranchChange` subscription and
+   timer are cleared in `dispose()`, and unmounting clears the widget and
+   restores the built-in footer. Frame data is copied from the upstream source;
+   the strip performs no IO beyond reading its own committed assets.
 9. The strip's separator mirrors the editor's border: same glyph (`─`), same
     `getThinkingBorderColor(level)` colour, re-derived on every render. The
     thinking level reaching the widget must come from `ctx.thinkingLevel` at

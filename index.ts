@@ -23,10 +23,12 @@
  *   It is a pure append, so it cannot invalidate the cached prefix. (A second,
  *   tool-result anchor was tried and removed: it showed no measurable effect —
  *   see eval/README.md.)
- * - The pet strip is display-only: it replaces Pi's built-in footer with an
- *   extension footer component, driven by agent lifecycle events, and it never
- *   calls `sendMessage`/`appendEntry`. It has its own `/whale pet` switch
- *   because it is a display preference rather than part of the persona.
+ * - The pet strip is display-only: it sits above the editor as an extension
+ *   widget and replaces Pi's built-in footer by mounting an empty footer (so
+ *   the strip, not the footer, owns the status line). It is driven by agent
+ *   lifecycle events and never calls `sendMessage`/`appendEntry`. It has its
+ *   own `/whale pet` switch because it is a display preference rather than part
+ *   of the persona.
  */
 
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -38,10 +40,26 @@ import {
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { WHALE_PERSONA, WHALE_VOICE_RULE, WHALE_TAIL_ANCHOR } from "./persona.js";
-import { WhalePetWidget, type PetStats } from "./pet.js";
+import { WhalePetWidget, type PetFooterData, type PetStats } from "./pet.js";
 
 const SECTION_NAME = "whale_persona";
 const STATE_FILE = "whale-chan.json";
+/** Widget key for the animated pet strip above the editor. */
+const PET_WIDGET_KEY = "whale_pet";
+
+/**
+ * Renders nothing. Mounted as Pi's footer while the strip is on, so the built-in
+ * footer's status surface is replaced by the strip above the editor rather than
+ * duplicated below it. `ctx.ui.setFooter(undefined)` restores the real footer.
+ * This is the pattern from Pi's own `border-status-editor.ts` example.
+ */
+class EmptyFooter {
+	render(): string[] {
+		return [];
+	}
+
+	invalidate(): void {}
+}
 
 /**
  * Mechanism switches — ablation only. Production (Pi) calls the factory with one
@@ -78,7 +96,7 @@ function statePath(): string | null {
 export interface WhaleConfig {
 	/** Whether the persona is injected into the system prompt. */
 	enabled: boolean;
-	/** Whether the animated pet strip is shown in place of Pi's built-in footer. */
+	/** Whether the animated pet strip is shown above the editor, replacing the built-in footer. */
 	pet: boolean;
 }
 
@@ -291,20 +309,23 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	// source of truth for config.
 	let enabled = true;
 	let petEnabled = true;
-	// Assigned by the footer factory Pi invokes from `setFooter`; null while the
+	// Assigned by the widget factory Pi invokes from `setWidget`; null while the
 	// strip is unmounted. That factory runs once per mount, so this stays the
 	// single live instance the lifecycle handlers poke.
 	let petWidget: WhalePetWidget | null = null;
+	// Footer-owned data (git branch, `ui.setStatus` entries, provider count). It
+	// is only reachable from the `setFooter` factory, so that factory stores it
+	// and the widget above the editor reads it.
+	let petFooterData: PetFooterData | undefined;
 	// Incremental token/cost fold for the status panel. One per extension
 	// instance; the accumulator rebuilds itself when the session changes.
 	const usageAcc = createUsageAccumulator();
 
-	// The pet is UI-only: it *replaces* Pi's built-in footer (via `setFooter`)
-	// and never touches the prompt. A footer is the documented extension slot for
-	// exactly this kind of persistent status surface: Pi disposes the previous
-	// component when the factory is replaced or cleared, and hands us the
-	// `footerData` provider for the git branch and `ui.setStatus` entries that
-	// `ctx` alone cannot expose.
+	// The pet is UI-only and never touches the prompt. It keeps its original
+	// spot *above the editor* (as a widget); to make it *replace* the built-in
+	// footer, a separate empty footer is mounted so the footer's status surface
+	// is not duplicated below. Pi invokes the `setFooter` factory synchronously,
+	// so `petFooterData` is captured before the widget factory below reads it.
 	const mountPet = (ctx: PetContext): void => {
 		if (petWidget !== null) {
 			// A second session_start without a shutdown should re-point the live
@@ -316,7 +337,11 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 			});
 			return;
 		}
-		ctx.ui.setFooter((tui, theme, footerData) => {
+		ctx.ui.setFooter((_tui, _theme, footerData) => {
+			petFooterData = footerData;
+			return new EmptyFooter();
+		});
+		ctx.ui.setWidget(PET_WIDGET_KEY, (tui, theme) => {
 			const widget = new WhalePetWidget(
 				tui,
 				theme,
@@ -326,19 +351,21 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 					thinkingLevel: ctx.thinkingLevel ?? "off",
 					stats: petStats(ctx, usageAcc),
 				},
-				footerData,
+				petFooterData,
 			);
 			petWidget = widget;
 			return widget;
 		});
 	};
 
-	// Pi disposes the component itself when a footer is replaced or cleared; we
+	// Pi disposes the component itself when a widget is replaced or cleared; we
 	// dispose first only so the frame timer is cancelled before the swap.
-	// `setFooter(undefined)` restores Pi's built-in footer.
+	// Clearing the widget and restoring the footer takes Pi's built-in footer
+	// back.
 	const unmountPet = (ctx: { ui: ExtensionUIContext }): void => {
 		petWidget?.dispose();
 		petWidget = null;
+		ctx.ui.setWidget(PET_WIDGET_KEY, undefined);
 		ctx.ui.setFooter(undefined);
 	};
 
@@ -404,9 +431,15 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 		petWidget?.update({ stats: petStats(ctx, usageAcc) });
 	});
 
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", (_event, ctx) => {
 		petWidget?.dispose();
 		petWidget = null;
+		// The widget and the hidden-footer state belong to the old session; drop
+		// both so a switch back starts from the real footer.
+		if (ctx.mode === "tui") {
+			ctx.ui.setWidget(PET_WIDGET_KEY, undefined);
+			ctx.ui.setFooter(undefined);
+		}
 	});
 
 	// Section patch, not prompt replacement: Pi diffs sections and appends only

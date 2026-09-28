@@ -619,16 +619,16 @@ process.env.PI_CODING_AGENT_DIR = sandbox;
 const { default: whaleChan, createUsageAccumulator, accumulateUsage } = await import("../index.ts");
 const STATE_PATH = join(sandbox, "whale-chan.json");
 
-function makeExtensionHarness() {
+function makeExtensionHarness(footerData = makeFooterData()) {
 	// Start every case from defaults: one case writes a preference to disk, and
 	// an order-dependent suite is a trap for whoever adds the next test.
 	rmSync(STATE_PATH, { force: true });
 	const handlers = new Map();
 	const commands = new Map();
+	const widgets = new Map();
 	// `setFooter` stores the factory; `undefined` means Pi's built-in footer is
 	// restored, so a footer-present check is `footers.current !== undefined`.
 	const footers = { current: undefined };
-	const footerData = makeFooterData();
 	const pi = {
 		on(event, handler) {
 			handlers.set(event, handler);
@@ -646,25 +646,40 @@ function makeExtensionHarness() {
 		thinkingLevel: "off",
 		ui: {
 			notify() {},
+			setWidget(key, content) {
+				if (content === undefined) widgets.delete(key);
+				else widgets.set(key, content);
+			},
 			setFooter(factory) {
 				footers.current = factory;
 			},
 		},
 	};
-	return { handlers, commands, footers, footerData, ctx };
+	return { handlers, commands, widgets, footers, footerData, ctx };
 }
 
-function mount(footers, theme = THEME, footerData = makeFooterData()) {
-	assert.ok(footers.current !== undefined, "the strip is mounted");
-	return footers.current(TUI, theme, footerData);
+/**
+ * Mount the strip the way Pi does: `setFooter` invokes its factory immediately,
+ * which is what lets the extension capture the footer data before the widget
+ * factory runs. The strip stays a widget above the editor; the footer is the
+ * empty component that replaces the built-in one.
+ */
+function mount({ widgets, footers, footerData }, theme = THEME) {
+	assert.ok(footers.current !== undefined, "the strip hides the built-in footer");
+	const empty = footers.current(TUI, theme, footerData);
+	assert.deepEqual(empty.render(80), [], "the replacement footer draws nothing");
+	const factory = widgets.get("whale_pet");
+	assert.ok(factory !== undefined, "the strip is mounted above the editor");
+	return factory(TUI, theme);
 }
 
 test("the strip mounts on session_start and follows the agent lifecycle", async () => {
 	kitty();
-	const { handlers, footers, footerData, ctx } = makeExtensionHarness();
+	const { handlers, widgets, footers, footerData, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
+	assert.ok(widgets.has("whale_pet"), "the strip mounts above the editor, not in the footer");
 
-	const widget = mount(footers, THEME, footerData);
+	const widget = mount({ widgets, footers, footerData });
 	assert.match(widget.render(80).join("\n"), /M/, "the model name is on the strip");
 	assert.match(widget.render(80).join("\n"), /⏵▕/, "the stats panel is drawn");
 
@@ -686,7 +701,7 @@ test("the strip mounts on session_start and follows the agent lifecycle", async 
 
 test("a thinking-level change recolours the separator through the real extension", async () => {
 	kitty();
-	const { handlers, footers, footerData, ctx } = makeExtensionHarness();
+	const { handlers, widgets, footers, footerData, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	const levels = [];
@@ -697,7 +712,7 @@ test("a thinking-level change recolours the separator through the real extension
 			return (text) => `<${level}>${text}</${level}>`;
 		},
 	};
-	const widget = mount(footers, theme, footerData);
+	const widget = mount({ widgets, footers, footerData }, theme);
 	await handlers.get("thinking_level_select")(
 		{ type: "thinking_level_select", level: "high", previousLevel: "off" },
 		ctx,
@@ -712,11 +727,13 @@ test("a thinking-level change recolours the separator through the real extension
 
 test("/whale pet off restores the built-in footer and pet on brings the strip back", async () => {
 	kitty();
-	const { handlers, commands, footers, ctx } = makeExtensionHarness();
+	const { handlers, commands, widgets, footers, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
-	assert.ok(footers.current !== undefined, "the strip starts mounted (pet defaults to on)");
+	assert.ok(widgets.has("whale_pet"), "the strip starts mounted above the editor");
+	assert.ok(footers.current !== undefined, "the built-in footer is hidden (pet defaults to on)");
 
 	await commands.get("whale").handler("pet off", ctx);
+	assert.ok(!widgets.has("whale_pet"), "off unmounts the strip");
 	assert.ok(footers.current === undefined, "off restores the built-in footer");
 	assert.equal(
 		JSON.parse(readFileSync(STATE_PATH, "utf8")).pet,
@@ -725,25 +742,39 @@ test("/whale pet off restores the built-in footer and pet on brings the strip ba
 	);
 
 	await commands.get("whale").handler("pet on", ctx);
-	assert.ok(footers.current !== undefined, "on remounts the strip");
+	assert.ok(widgets.has("whale_pet"), "on remounts the strip");
+	assert.ok(footers.current !== undefined, "and hides the built-in footer again");
 });
 
 test("the persona toggle leaves the pet strip alone", async () => {
 	kitty();
-	const { handlers, commands, footers, ctx } = makeExtensionHarness();
+	const { handlers, commands, widgets, footers, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	await commands.get("whale").handler("off", ctx);
-	assert.ok(footers.current !== undefined, "the two switches are independent");
+	assert.ok(widgets.has("whale_pet"), "the two switches are independent");
+	assert.ok(footers.current !== undefined, "persona off keeps the footer hidden");
 	assert.equal(JSON.parse(readFileSync(STATE_PATH, "utf8")).pet, true, "persona off keeps pet on");
 });
 
 test("a disabled pet preference never mounts the strip", async () => {
 	kitty();
-	const { handlers, footers, commands, ctx } = makeExtensionHarness();
+	const { handlers, widgets, footers, commands, ctx } = makeExtensionHarness();
 	await commands.get("whale").handler("pet off", ctx);
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
-	assert.ok(footers.current === undefined, "the persisted preference is honoured on the next session");
+	assert.ok(!widgets.has("whale_pet"), "the persisted preference is honoured on the next session");
+	assert.ok(footers.current === undefined, "and the built-in footer stays");
+});
+
+test("the strip above the editor carries the footer's git branch", async () => {
+	kitty();
+	const footerData = makeFooterData({ getGitBranch: () => "feat/pet-footer" });
+	const { handlers, widgets, footers, ctx } = makeExtensionHarness(footerData);
+	await handlers.get("session_start")({ type: "session_start" }, ctx);
+
+	const widget = mount({ widgets, footers, footerData });
+	assert.match(widget.render(120).join("\n"), / \(feat\/pet-footer\)/, "footerData reaches the widget");
+	widget.dispose();
 });
 
 test("usage totals accumulate incrementally and rebuild on a session change", () => {

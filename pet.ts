@@ -1,8 +1,10 @@
 /**
- * Whale-chan pet — an animated avatar plus a model/status strip that replaces
- * Pi's built-in footer (mounted via `ctx.ui.setFooter`).
+ * Whale-chan pet — an animated avatar plus a model/status strip that Pi draws
+ * above the editor as a widget. The extension replaces Pi's built-in footer with
+ * an empty footer component, so the strip owns the status surface without
+ * duplicating it below.
  *
- * Display-only by construction: this renders inside Pi's footer container and
+ * Display-only by construction: this renders inside Pi's widget container and
  * never calls `sendMessage`/`appendEntry`, so it cannot enter the LLM context,
  * change the system prompt, or invalidate a cached prefix.
  *
