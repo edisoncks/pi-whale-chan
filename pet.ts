@@ -1,10 +1,10 @@
 /**
- * Whale-chan pet widget — an animated avatar plus a model/status strip that Pi
- * draws above the editor.
+ * Whale-chan pet — an animated avatar plus a model/status strip that replaces
+ * Pi's built-in footer (mounted via `ctx.ui.setFooter`).
  *
- * Display-only by construction: this renders inside Pi's extension widget
- * container and never calls `sendMessage`/`appendEntry`, so it cannot enter the
- * LLM context, change the system prompt, or invalidate a cached prefix.
+ * Display-only by construction: this renders inside Pi's footer container and
+ * never calls `sendMessage`/`appendEntry`, so it cannot enter the LLM context,
+ * change the system prompt, or invalidate a cached prefix.
  *
  * Artwork is derived from `dsh-whale-pet` by Er1c0v0 (CC-BY-4.0). The frame
  * order and per-frame timing below are copied verbatim from that project's
@@ -106,10 +106,32 @@ export interface PetStats {
 	readonly contextPercent: number | null;
 	readonly inputTokens: number;
 	readonly outputTokens: number;
+	/** Cumulative cache-read tokens, shown as `R…` like Pi's footer. */
+	readonly cacheRead: number;
+	/** Cumulative cache-write tokens, shown as `W…` like Pi's footer. */
+	readonly cacheWrite: number;
 	/** Cache hit rate of the latest prompt, 0-100. */
 	readonly cacheHitRate: number;
 	readonly cost: number;
 	readonly cwd: string;
+	/** Custom session name, shown after the cwd like Pi's footer. */
+	readonly sessionName: string | null;
+	/** Model provider id, prefixed when more than one provider is available. */
+	readonly provider: string;
+}
+
+/**
+ * The slice of Pi's `ReadonlyFooterDataProvider` this widget reads. Declared
+ * structurally for the same reason as `PetTheme`: it keeps the module free of
+ * the coding-agent's internal module path while a real provider still
+ * satisfies it. These fields are the data a footer owns and an extension
+ * cannot get from `ctx` alone (git branch and `ui.setStatus` entries).
+ */
+export interface PetFooterData {
+	getGitBranch(): string | null;
+	getExtensionStatuses(): ReadonlyMap<string, string>;
+	getAvailableProviderCount(): number;
+	onBranchChange(callback: () => void): () => void;
 }
 
 const ASSET_DIR = join(dirname(fileURLToPath(import.meta.url)), "assets", "whale-pet");
@@ -339,6 +361,27 @@ function shortenHome(cwd: string): string {
 	return home !== undefined && home.length > 0 && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
 }
 
+/**
+ * Sanitize a `ui.setStatus` entry for a single line: newlines, tabs, carriage
+ * returns and control characters are folded to spaces, then runs collapse.
+ * Copied from Pi's footer so the same status text reads identically here.
+ */
+export function sanitizeStatusText(text: string): string {
+	// eslint-disable-next-line no-control-regex
+	return text.replace(/[\r\n\t\x00-\x1f\x7f]/g, " ").replace(/ +/g, " ").trim();
+}
+
+/**
+ * Extension statuses in a stable order, matching Pi's footer (sorted by key).
+ */
+export function formatStatuses(statuses: ReadonlyMap<string, string>): string {
+	return Array.from(statuses.entries())
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([, text]) => sanitizeStatusText(text))
+		.filter((text) => text.length > 0)
+		.join(" ");
+}
+
 export class WhalePetWidget implements Component {
 	private readonly tui: TUI;
 	private readonly theme: PetTheme;
@@ -350,16 +393,29 @@ export class WhalePetWidget implements Component {
 	private readonly imageId = allocateImageId();
 	private readonly images = new Map<string, Image>();
 	private readonly withAvatar: boolean;
+	/**
+	 * Footer-owned data (git branch, `ui.setStatus` entries, provider count).
+	 * Absent when the widget is mounted as a plain widget (e.g. under test),
+	 * in which case those fields simply stay blank.
+	 */
+	private readonly footerData: PetFooterData | undefined;
+	private readonly unsubscribeBranch: (() => void) | undefined;
 	private view: PetViewModel;
 	private index = 0;
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private closed = false;
 
-	constructor(tui: TUI, theme: PetTheme, view: PetViewModel) {
+	constructor(tui: TUI, theme: PetTheme, view: PetViewModel, footerData?: PetFooterData) {
 		this.tui = tui;
 		this.theme = theme;
 		this.view = view;
+		this.footerData = footerData;
 		this.withAvatar = getCapabilities().images === "kitty";
+		// The branch can change under us (checkout, rebase); Pi's footer redraws on
+		// that signal, and so must this one or the strip keeps a stale branch.
+		this.unsubscribeBranch = footerData?.onBranchChange(() => {
+			if (!this.closed) this.tui.requestRender();
+		});
 		this.arm();
 	}
 
@@ -386,6 +442,7 @@ export class WhalePetWidget implements Component {
 		this.closed = true;
 		if (this.timer !== undefined) clearTimeout(this.timer);
 		this.timer = undefined;
+		this.unsubscribeBranch?.();
 		this.images.clear();
 	}
 
@@ -515,24 +572,48 @@ export class WhalePetWidget implements Component {
 	private infoLines(width: number, hasAvatar: boolean): string[] {
 		const { model, thinkingLevel, stats } = this.view;
 		const thinking = this.theme.getThinkingBorderColor(thinkingLevel);
-		let modelLine = model;
+		// Pi's footer disambiguates the provider only when more than one is
+		// available, so a single-provider setup stays uncluttered.
+		const providerCount = this.footerData?.getAvailableProviderCount() ?? 0;
+		let modelLine = providerCount > 1 && stats?.provider ? `(${stats.provider}) ${model}` : model;
 		if (stats?.reasoning) modelLine += ` • ${thinkingLevel}`;
 		if (stats) modelLine += ` • ${formatTokens(stats.contextWindow)}`;
 		const lines = [this.theme.bold(thinking(modelLine))];
 		if (stats) {
 			const barColor = resolveProgressColor(stats.contextPercent ?? 0, stats.cacheHitRate);
 			lines.push(this.theme.fg(barColor, buildProgressBar(stats)));
-			lines.push(
-				this.theme.fg(
-					"dim",
-					`↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)} ` +
-						`⇞${stats.cacheHitRate.toFixed(1)}% $${stats.cost.toFixed(3)}`,
-				),
-			);
-			lines.push(this.theme.fg("warning", shortenHome(stats.cwd)));
+			lines.push(this.theme.fg("dim", this.usageLine(stats)));
+			lines.push(this.theme.fg("warning", this.locationLine(stats)));
 		}
 		const budget = Math.max(1, width - (hasAvatar ? textColumn() : 0));
 		return lines.map((line) => truncateToWidth(line, budget));
+	}
+
+	/**
+	 * Usage line, mirroring Pi's footer: `↑in ↓out R… W… CH… $cost`. The cache
+	 * parts are omitted until there is cache data, exactly as the footer does,
+	 * so a cold session is not padded with `R0 W0`.
+	 */
+	private usageLine(stats: PetStats): string {
+		let line = `↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`;
+		if (stats.cacheRead > 0) line += ` R${formatTokens(stats.cacheRead)}`;
+		if (stats.cacheWrite > 0) line += ` W${formatTokens(stats.cacheWrite)}`;
+		if (stats.cacheRead > 0 || stats.cacheWrite > 0) line += ` ⇞${stats.cacheHitRate.toFixed(1)}%`;
+		return `${line} $${stats.cost.toFixed(3)}`;
+	}
+
+	/**
+	 * Location line, mirroring Pi's footer's first line: `cwd (branch) • name`,
+	 * then any extension statuses (`ui.setStatus`) so the strip carries them too.
+	 */
+	private locationLine(stats: PetStats): string {
+		let line = shortenHome(stats.cwd);
+		const branch = this.footerData?.getGitBranch();
+		if (branch) line += ` (${branch})`;
+		if (stats.sessionName) line += ` • ${stats.sessionName}`;
+		const statuses = this.footerData ? formatStatuses(this.footerData.getExtensionStatuses()) : "";
+		if (statuses.length > 0) line += ` • ${statuses}`;
+		return line;
 	}
 
 	/**

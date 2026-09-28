@@ -57,10 +57,12 @@ const {
 	avatarInset,
 	buildProgressBar,
 	fitCells,
+	formatStatuses,
 	formatTokens,
 	framePath,
 	loadFrame,
 	resolveProgressColor,
+	sanitizeStatusText,
 	stateColumns,
 	textColumn,
 } = await import("../pet.ts");
@@ -159,10 +161,25 @@ const DEFAULT_STATS = {
 	contextPercent: 1.4,
 	inputTokens: 10_000,
 	outputTokens: 4_600,
+	cacheRead: 14_000,
+	cacheWrite: 200,
 	cacheHitRate: 99.8,
 	cost: 0.003,
 	cwd: join(process.env.HOME ?? "/home/test", "repos", "pi-emote"),
+	sessionName: "session-name",
+	provider: "deepseek",
 };
+
+/** Footer data a live Pi session would hand the factory. */
+function makeFooterData(overrides = {}) {
+	return {
+		getGitBranch: () => "main",
+		getExtensionStatuses: () => new Map(),
+		getAvailableProviderCount: () => 1,
+		onBranchChange: () => () => {},
+		...overrides,
+	};
+}
 
 function makeWidget(view, tui = TUI, theme = THEME) {
 	return new WhalePetWidget(tui, theme, { thinkingLevel: "off", stats: DEFAULT_STATS, ...view });
@@ -515,8 +532,70 @@ test("the info panel renders the four stat lines", () => {
 	widget.dispose();
 	assert.match(text, /deepseek-v4\.1-flash • off • 1\.0M/, "model, level, and window");
 	assert.match(text, /⏵▕/, "a progress bar");
-	assert.match(text, /↑10K ↓4\.6K ⇞99\.8% \$0\.003/, "token and cost totals");
+	assert.match(text, /↑10K ↓4\.6K R14K W200 ⇞99\.8% \$0\.003/, "token, cache, and cost totals");
 	assert.match(text, /~\/repos\/pi-emote/, "the cwd, home-abbreviated");
+});
+
+test("statuses are sorted by key and stripped to one line", () => {
+	assert.equal(sanitizeStatusText(" a\n b\t c "), "a b c", "newlines and tabs fold to single spaces");
+	assert.equal(
+		formatStatuses(new Map([["z", "last"], ["a", "first"], ["m", "   "]])),
+		"first last",
+		"key order is stable and blank statuses drop out",
+	);
+});
+
+test("footer data contributes the git branch, provider, and statuses", () => {
+	kitty();
+	const footerData = makeFooterData({
+		getGitBranch: () => "feat/pet-footer",
+		getExtensionStatuses: () => new Map([["b", "β"], ["a", "α"]]),
+		getAvailableProviderCount: () => 2,
+	});
+	const widget = new WhalePetWidget(
+		TUI,
+		THEME,
+		{ state: "idle", thinkingLevel: "off", model: "m", stats: DEFAULT_STATS },
+		footerData,
+	);
+	const text = widget.render(120).join("\n");
+	widget.dispose();
+	assert.match(text, /\(deepseek\) m/, "the provider is prefixed when more than one is available");
+	assert.match(
+		text,
+		/~\/repos\/pi-emote \(feat\/pet-footer\) • session-name • α β/,
+		"branch, session name, and sorted statuses share the location line",
+	);
+});
+
+test("a branch change asks the TUI to re-render, and dispose stops it", () => {
+	kitty();
+	let onChange;
+	let active = true;
+	const { tui, renders } = makeTui();
+	const footerData = makeFooterData({
+		onBranchChange: (callback) => {
+			onChange = () => {
+				if (active) callback();
+			};
+			return () => {
+				active = false;
+			};
+		},
+	});
+	const widget = new WhalePetWidget(
+		tui,
+		THEME,
+		{ state: "idle", thinkingLevel: "off", model: "m", stats: DEFAULT_STATS },
+		footerData,
+	);
+	const before = renders();
+	onChange();
+	assert.equal(renders(), before + 1, "the branch signal redraws the strip");
+	widget.dispose();
+	const afterDispose = renders();
+	onChange();
+	assert.equal(renders(), afterDispose, "a disposed widget ignores the branch signal");
 });
 
 test("without stats only the model line is drawn", () => {
@@ -546,7 +625,10 @@ function makeExtensionHarness() {
 	rmSync(STATE_PATH, { force: true });
 	const handlers = new Map();
 	const commands = new Map();
-	const widgets = new Map();
+	// `setFooter` stores the factory; `undefined` means Pi's built-in footer is
+	// restored, so a footer-present check is `footers.current !== undefined`.
+	const footers = { current: undefined };
+	const footerData = makeFooterData();
 	const pi = {
 		on(event, handler) {
 			handlers.set(event, handler);
@@ -564,27 +646,25 @@ function makeExtensionHarness() {
 		thinkingLevel: "off",
 		ui: {
 			notify() {},
-			setWidget(key, content) {
-				if (content === undefined) widgets.delete(key);
-				else widgets.set(key, content);
+			setFooter(factory) {
+				footers.current = factory;
 			},
 		},
 	};
-	return { handlers, commands, widgets, ctx };
+	return { handlers, commands, footers, footerData, ctx };
 }
 
-function mount(widgets, theme = THEME) {
-	const factory = widgets.get("whale_pet");
-	assert.ok(factory !== undefined, "the strip is mounted");
-	return factory(TUI, theme);
+function mount(footers, theme = THEME, footerData = makeFooterData()) {
+	assert.ok(footers.current !== undefined, "the strip is mounted");
+	return footers.current(TUI, theme, footerData);
 }
 
 test("the strip mounts on session_start and follows the agent lifecycle", async () => {
 	kitty();
-	const { handlers, widgets, ctx } = makeExtensionHarness();
+	const { handlers, footers, footerData, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
-	const widget = mount(widgets);
+	const widget = mount(footers, THEME, footerData);
 	assert.match(widget.render(80).join("\n"), /M/, "the model name is on the strip");
 	assert.match(widget.render(80).join("\n"), /⏵▕/, "the stats panel is drawn");
 
@@ -606,7 +686,7 @@ test("the strip mounts on session_start and follows the agent lifecycle", async 
 
 test("a thinking-level change recolours the separator through the real extension", async () => {
 	kitty();
-	const { handlers, widgets, ctx } = makeExtensionHarness();
+	const { handlers, footers, footerData, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	const levels = [];
@@ -617,7 +697,7 @@ test("a thinking-level change recolours the separator through the real extension
 			return (text) => `<${level}>${text}</${level}>`;
 		},
 	};
-	const widget = mount(widgets, theme);
+	const widget = mount(footers, theme, footerData);
 	await handlers.get("thinking_level_select")(
 		{ type: "thinking_level_select", level: "high", previousLevel: "off" },
 		ctx,
@@ -630,14 +710,14 @@ test("a thinking-level change recolours the separator through the real extension
 	widget.dispose();
 });
 
-test("/whale pet off unmounts the strip and pet on brings it back", async () => {
+test("/whale pet off restores the built-in footer and pet on brings the strip back", async () => {
 	kitty();
-	const { handlers, commands, widgets, ctx } = makeExtensionHarness();
+	const { handlers, commands, footers, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
-	assert.ok(widgets.has("whale_pet"), "the strip starts mounted (pet defaults to on)");
+	assert.ok(footers.current !== undefined, "the strip starts mounted (pet defaults to on)");
 
 	await commands.get("whale").handler("pet off", ctx);
-	assert.ok(!widgets.has("whale_pet"), "off unmounts the strip");
+	assert.ok(footers.current === undefined, "off restores the built-in footer");
 	assert.equal(
 		JSON.parse(readFileSync(STATE_PATH, "utf8")).pet,
 		false,
@@ -645,25 +725,25 @@ test("/whale pet off unmounts the strip and pet on brings it back", async () => 
 	);
 
 	await commands.get("whale").handler("pet on", ctx);
-	assert.ok(widgets.has("whale_pet"), "on remounts the strip");
+	assert.ok(footers.current !== undefined, "on remounts the strip");
 });
 
 test("the persona toggle leaves the pet strip alone", async () => {
 	kitty();
-	const { handlers, commands, widgets, ctx } = makeExtensionHarness();
+	const { handlers, commands, footers, ctx } = makeExtensionHarness();
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	await commands.get("whale").handler("off", ctx);
-	assert.ok(widgets.has("whale_pet"), "the two switches are independent");
+	assert.ok(footers.current !== undefined, "the two switches are independent");
 	assert.equal(JSON.parse(readFileSync(STATE_PATH, "utf8")).pet, true, "persona off keeps pet on");
 });
 
 test("a disabled pet preference never mounts the strip", async () => {
 	kitty();
-	const { handlers, widgets, commands, ctx } = makeExtensionHarness();
+	const { handlers, footers, commands, ctx } = makeExtensionHarness();
 	await commands.get("whale").handler("pet off", ctx);
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
-	assert.ok(!widgets.has("whale_pet"), "the persisted preference is honoured on the next session");
+	assert.ok(footers.current === undefined, "the persisted preference is honoured on the next session");
 });
 
 test("usage totals accumulate incrementally and rebuild on a session change", () => {

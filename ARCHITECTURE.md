@@ -26,7 +26,7 @@ the desired sections against the ones the model already has and sends a patch
 |---|---|
 | `index.ts` | Config load/save, `before_agent_start` section injection, tail anchor, pet strip lifecycle, `/whale` command |
 | `persona.ts` | Frozen persona (`WHALE_PERSONA`) plus the voice rule and tail anchor (`WHALE_VOICE_RULE`, `WHALE_TAIL_ANCHOR`) |
-| `pet.ts` | Frame tables and `WhalePetWidget` — the animated strip above the editor |
+| `pet.ts` | Frame tables and `WhalePetWidget` — the animated strip that replaces the built-in footer |
 
 ## Design decisions
 
@@ -157,10 +157,13 @@ rather than guessing the language by script.
 
 ### Why the pet strip is hand-composed
 
-`ctx.ui.setWidget()` is the documented path for persistent content near the
-editor and its default placement is already `aboveEditor`, so the strip needs no
-layout negotiation. Three pi-tui properties decide the rendering strategy, and
-each one is a trap that a naive `HStack(Image, Text)` walks straight into:
+`ctx.ui.setFooter()` is the documented path for replacing Pi's built-in footer,
+and a footer is the right slot for a persistent status surface: Pi disposes the
+previous component when the factory is replaced or cleared, hands the factory a
+`footerData` provider for the git branch and `ui.setStatus` entries, and
+`setFooter(undefined)` restores the built-in footer when the pet is switched off.
+Three pi-tui properties decide the rendering strategy, and each one is a trap
+that a naive `HStack(Image, Text)` walks straight into:
 
 - **The image reports zero visible width.** `Image.render()` returns the Kitty
 escape sequence on one line and blank lines for the rest; a stripped escape
@@ -207,20 +210,32 @@ cells the frame does not cover; every other row reaches the divider with
 cursor-forward. Everything left of the text comes from one function,
 `textColumn()`, so the rendered indent and the truncation budget cannot drift
 apart.
-**Why the status panel looks the way it does.** The four lines beside the
-avatar — model • thinking level • context window, a context progress bar,
-cumulative input/output tokens with cache-hit rate and cost, and the working
-directory — mirror the info panel in
-[pi-emote](https://github.com/cgxeiji/pi-emote). `index.ts` builds one snapshot
-(`petStats`) from `ctx` and refreshes it on `agent_start`, every `message_end`,
-`agent_settled`, and on `thinking_level_select`/`model_select`, so the numbers
-track the session while the widget stays a pure function of its view model. A
-missing snapshot is not an error: the panel falls back to the model line alone,
-which is what the text-only path renders.
+**Why the status panel looks the way it does, and what it cannot carry.** The
+four lines beside the avatar mirror Pi's own footer: `(provider) model • level •
+window`; a context progress bar; `↑in ↓out R… W… CH…% $cost`; and
+`cwd (branch) • sessionName` plus any `ui.setStatus` entries. The first three
+are the info panel of
+[pi-emote](https://github.com/cgxeiji/pi-emote) grown to footer parity. `index.ts`
+builds one snapshot (`petStats`) from `ctx` and refreshes it on `agent_start`,
+every `message_end`, `agent_settled`, `session_info_changed`, and on
+`thinking_level_select`/`model_select`; the branch and statuses come from the
+`footerData` the footer factory receives, and the branch subscription redraws on
+checkout. A missing snapshot is not an error: the panel falls back to the model
+line alone, which is what the text-only path renders.
 
-**Why the frame timer lives in the component.** `setExtensionWidget` calls the
+Three footer fields are deliberately absent because the extension API does not
+expose them: the auto-compaction `(auto)` marker
+(`AgentSession.autoCompactionEnabled` has no `ctx` equivalent and no change
+event), the subscription `(sub)` marker (`ModelRuntime.isUsingSubscription` is
+not on `ctx.modelRegistry`), and the experimental-features `xp` badge
+(`areExperimentalFeaturesEnabled` is not exported, and the package's `exports`
+map blocks a deep import). Reaching them would mean reading Pi private state;
+the strip stays on the public API instead, and `/whale pet off` restores the
+built-in footer for anyone who needs them.
+
+**Why the frame timer lives in the component.** `setExtensionFooter` calls the
 factory once and keeps the returned component, and it calls `dispose()` when the
-widget is replaced or cleared. A component-owned timer is therefore the only
+footer is replaced or cleared. A component-owned timer is therefore the only
 place a frame loop can live. The timer is `unref()`'d so a pending frame can
 never keep Pi from exiting.
 
@@ -326,9 +341,11 @@ state across restarts.
 7. The tail anchor is a pure append and never touches the system prompt:
    `WHALE_TAIL_ANCHOR` is appended only when the last message is a tool result.
    It is a frozen constant.
-8. The pet strip is display-only: it is mounted with `ctx.ui.setWidget`, updated
-   only by lifecycle events, and never calls `sendMessage`/`appendEntry`. Its
-   frame timer is `unref()`'d and cleared in `dispose()`. Frame data is copied
+8. The pet strip is display-only: it replaces Pi's built-in footer via
+   `ctx.ui.setFooter`, is updated only by lifecycle events, and never calls
+   `sendMessage`/`appendEntry`. Its frame timer is `unref()`'d, its
+   `footerData.onBranchChange` subscription and timer are cleared in `dispose()`,
+   and `setFooter(undefined)` restores the built-in footer. Frame data is copied
    from the upstream source; the strip performs no IO beyond reading its own
    committed assets.
 9. The strip's separator mirrors the editor's border: same glyph (`─`), same
