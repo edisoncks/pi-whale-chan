@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
-  <img alt="Node: >=22.19.0" src="https://img.shields.io/badge/node-%E2%89%A522.19.0-brightgreen">
+  <a href="https://nodejs.org"><img alt="Node 22.19.0 or newer" src="https://img.shields.io/badge/node-%E2%89%A522.19.0-brightgreen"></a>
   <a href="https://github.com/edisoncks/pi-whale-chan/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/edisoncks/pi-whale-chan/actions/workflows/ci.yml/badge.svg"></a>
 </p>
 
