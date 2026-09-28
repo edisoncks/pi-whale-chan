@@ -17,6 +17,6 @@ jobs:
       - run: npm ci
       # Credential-free checks only. eval/run.ts and eval/probe.ts create real
       # sessions and need provider credentials, so they stay out of CI; the
-      # --replay path makes no model calls and is exercised by the unit tests.
+      # --replay path makes no model calls, but it is not exercised here either.
       - run: npm run typecheck
       - run: npm test
