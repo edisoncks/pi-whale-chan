@@ -19,17 +19,18 @@ whatever language you write in — stage directions and all.
 
 ## Demo
 
+https://github.com/user-attachments/assets/72e1d11a-7b14-4af7-b6e7-a6ee94329b0d
+
 <p align="center">
   <img src="assets/whale-chan-demo.gif" alt="Whale-chan's pet strip animating above Pi's editor while a turn runs" width="640">
   <br>
-  <sub>Ten seconds of a live run · <a href="assets/whale-chan-demo.mp4">full 28-second capture</a> (MP4, 234 KB, downloads as a file)</sub>
+  <sub>Ten-second loop, for viewers that cannot play the attachment above · <a href="assets/whale-chan-demo.mp4">full 28-second MP4, 234 KB</a></sub>
 </p>
 
-<!-- github.com sanitises README HTML: <video> tags whose src is a repo-relative path are stripped,
-     and raw.githubusercontent.com serves .mp4 as application/octet-stream, so a committed MP4 can
-     only be downloaded, never played inline — the animated GIF above is what makes the demo move on
-     github.com. For a real player covering all 28 seconds, drag assets/whale-chan-demo.mp4 into this
-     file in the GitHub web editor and put the resulting user-attachment URL in its own paragraph here. -->
+<!-- The bare URL above is a GitHub user attachment — the only form github.com renders as a player.
+     A committed MP4 cannot play inline: raw.githubusercontent.com serves it as
+     application/octet-stream, and <video> tags pointing at repo-relative paths are stripped by the
+     sanitiser. The animated GIF therefore stays as the demo for npm and IDE previews. -->
 
 ## Install
 

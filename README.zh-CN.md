@@ -16,17 +16,18 @@
 
 ## 演示
 
+https://github.com/user-attachments/assets/72e1d11a-7b14-4af7-b6e7-a6ee94329b0d
+
 <p align="center">
   <img src="assets/whale-chan-demo.gif" alt="Pi 编辑器上方正在运行的鲸鱼娘动态状态栏" width="640">
   <br>
-  <sub>实际运行中的 10 秒 · <a href="assets/whale-chan-demo.mp4">完整 28 秒录像</a>（MP4，234 KB，会以文件形式下载）</sub>
+  <sub>10 秒循环，给无法播放上面附件的渲染器 · <a href="assets/whale-chan-demo.mp4">完整 28 秒 MP4，234 KB</a></sub>
 </p>
 
-<!-- github.com 会清洗 README 的 HTML：src 指向仓库内相对路径的 <video> 标签会被整段移除，而
-     raw.githubusercontent.com 把 .mp4 当作 application/octet-stream 返回，所以提交进仓库的 mp4
-     只能下载、无法内嵌播放——上面这张动态 GIF 才是让演示在 github.com 上动起来的关键。
-     想要能播完整个 28 秒的真播放器，请在 GitHub 网页编辑器中把 assets/whale-chan-demo.mp4
-     拖进本文件，再把生成的 user-attachment 链接单独放成一段。 -->
+<!-- 上面那段裸链接是 GitHub 的 user attachment——它是 github.com 唯一会渲染成播放器的形式。
+     提交进仓库的 mp4 无法内嵌播放：raw.githubusercontent.com 以 application/octet-stream
+     返回它，而 src 指向仓库相对路径的 <video> 标签会被清洗器整段移除。所以动态 GIF 保留下来，
+     供 npm 与 IDE 预览使用。 -->
 
 ## 安装
 
