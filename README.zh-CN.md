@@ -17,16 +17,16 @@
 ## 演示
 
 <p align="center">
-  <a href="assets/whale-chan-demo.mp4">
-    <img src="assets/whale-chan-demo-poster.webp" alt="Pi 编辑器上方的鲸鱼娘动态状态栏" width="760">
-  </a>
+  <img src="assets/whale-chan-demo.gif" alt="Pi 编辑器上方正在运行的鲸鱼娘动态状态栏" width="640">
   <br>
-  ▶ <a href="assets/whale-chan-demo.mp4">观看 28 秒演示</a> <sub>（MP4，234 KB，无音轨）</sub>
+  <sub>实际运行中的 10 秒 · <a href="assets/whale-chan-demo.mp4">完整 28 秒录像</a>（MP4，234 KB，会以文件形式下载）</sub>
 </p>
 
-<!-- github.com 会清洗掉 src 指向仓库内相对路径的 <video> 标签，所以上面放的是链接到视频的封面图。
-     想在 github.com 上直接内嵌播放器，请在 GitHub 网页编辑器中把 assets/whale-chan-demo.mp4
-     拖进本文件，再把生成的 user-attachment 链接单独放成一段——GitHub 会把它渲染成真正的播放器。 -->
+<!-- github.com 会清洗 README 的 HTML：src 指向仓库内相对路径的 <video> 标签会被整段移除，而
+     raw.githubusercontent.com 把 .mp4 当作 application/octet-stream 返回，所以提交进仓库的 mp4
+     只能下载、无法内嵌播放——上面这张动态 GIF 才是让演示在 github.com 上动起来的关键。
+     想要能播完整个 28 秒的真播放器，请在 GitHub 网页编辑器中把 assets/whale-chan-demo.mp4
+     拖进本文件，再把生成的 user-attachment 链接单独放成一段。 -->
 
 ## 安装
 

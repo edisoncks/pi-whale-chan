@@ -20,17 +20,16 @@ whatever language you write in — stage directions and all.
 ## Demo
 
 <p align="center">
-  <a href="assets/whale-chan-demo.mp4">
-    <img src="assets/whale-chan-demo-poster.webp" alt="Whale-chan's animated pet strip running above Pi's editor" width="760">
-  </a>
+  <img src="assets/whale-chan-demo.gif" alt="Whale-chan's pet strip animating above Pi's editor while a turn runs" width="640">
   <br>
-  ▶ <a href="assets/whale-chan-demo.mp4">Watch the 28-second demo</a> <sub>(MP4, 234 KB, no audio)</sub>
+  <sub>Ten seconds of a live run · <a href="assets/whale-chan-demo.mp4">full 28-second capture</a> (MP4, 234 KB, downloads as a file)</sub>
 </p>
 
-<!-- github.com strips <video> tags whose src is a repo-relative path, so the demo above is a poster
-     that links to the file. For an inline player on github.com, drag assets/whale-chan-demo.mp4 into
-     this file in the GitHub web editor and put the resulting user-attachment URL in its own
-     paragraph here — GitHub renders that URL as a real player. -->
+<!-- github.com sanitises README HTML: <video> tags whose src is a repo-relative path are stripped,
+     and raw.githubusercontent.com serves .mp4 as application/octet-stream, so a committed MP4 can
+     only be downloaded, never played inline — the animated GIF above is what makes the demo move on
+     github.com. For a real player covering all 28 seconds, drag assets/whale-chan-demo.mp4 into this
+     file in the GitHub web editor and put the resulting user-attachment URL in its own paragraph here. -->
 
 ## Install
 

@@ -63,11 +63,13 @@ that must sit on an arbitrary terminal background.
 
 ## Demo recording
 
-`assets/whale-chan-demo.mp4` and its poster `assets/whale-chan-demo-poster.webp` are a screen
-capture of this extension running in Pi, recorded by the project maintainer. The capture was
-re-encoded for the repository: 928×672, 15 fps, H.264 CRF 28, `+faststart`, and the (digitally
-silent) AAC track dropped. It *shows* the CC-BY-4.0 pet artwork listed above and the community fan
-character, but introduces no third-party artwork of its own.
+`assets/whale-chan-demo.mp4` is a screen capture of this extension running in Pi, recorded by the
+project maintainer. The capture was re-encoded for the repository: 928×672, 15 fps, H.264 CRF 28,
+`+faststart`, and the (digitally silent) AAC track dropped. `assets/whale-chan-demo.gif` is that
+same capture trimmed to its ten busiest seconds so the README can show it inline (640×464, 8 fps,
+64-colour palette); github.com renders a committed MP4 as a download only, never as a player. Both
+files *show* the CC-BY-4.0 pet artwork listed above and the community fan character, but introduce
+no third-party artwork of their own.
 
 ## Not covered here
 
