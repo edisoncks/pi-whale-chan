@@ -14,6 +14,18 @@
 
 开启之后，Pi 就不再是那个一本正经的助手了。它会回嘴、甩尾巴、管你叫「主人」，而且活儿照样干得漂亮。你用哪种语言，它就用哪种语言回复——连动作描写也一样。
 
+## 演示
+
+[▶ 观看 28 秒演示](https://github.com/user-attachments/assets/72e1d11a-7b14-4af7-b6e7-a6ee94329b0d)
+
+<sub>928×672 录屏 · 仓库内副本：<a href="assets/whale-chan-demo.mp4">MP4</a>（234 KB）</sub>
+
+<!-- 上面这条链接指向 GitHub 的 user attachment：在 github.com 上它会被渲染成播放器（链接文字会被
+     播放器取代），在其它渲染器里则退化成普通链接——这正是用链接而不是裸网址的原因。
+     提交进仓库的 mp4 无法内嵌播放：raw.githubusercontent.com 以 application/octet-stream 返回它，
+     而 src 指向仓库相对路径的 <video> 标签会被清洗器整段移除，所以视频托管在 attachment 上，
+     仓库里的 MP4 是长久可用的副本。 -->
+
 ## 安装
 
 ```bash
