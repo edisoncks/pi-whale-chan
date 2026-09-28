@@ -56,6 +56,8 @@ const {
 	TIDE_FOAM_FRAMES,
 	WhalePetWidget,
 	avatarInset,
+	bandRows,
+	buildBandEscapes,
 	buildTideBar,
 	fitCells,
 	formatStatuses,
@@ -67,7 +69,7 @@ const {
 	stateColumns,
 	textColumn,
 } = await import("../pet.ts");
-const { TuiMainScreen, resetCapabilitiesCache, setCapabilities, setCellDimensions } =
+const { TuiAltScreen, TuiMainScreen, resetCapabilitiesCache, setCapabilities, setCellDimensions } =
 	await import("@earendil-works/pi-tui");
 
 /**
@@ -201,6 +203,71 @@ function kitty() {
 	setCapabilities({ images: "kitty", trueColor: true, hyperlinks: false });
 }
 
+/**
+ * Reconstruct the visible text of a fullscreen (alt-screen) frame. The renderer
+ * positions every row absolutely and clears it with `ESC[2K`; the widget's
+ * per-row image escapes are zero-width, so a small grid is enough to prove the
+ * panel rows survive those per-row clears. Kitty graphics are skipped and marked
+ * `#` so image rows are visible too.
+ */
+function altScreenText(chunks, columns, rows) {
+	const grid = Array.from({ length: rows + 8 }, () => Array(columns).fill(" "));
+	let r = 0;
+	let c = 0;
+	const text = chunks.join("");
+	let i = 0;
+	while (i < text.length) {
+		if (text.startsWith("\x1b_G", i)) {
+			const end = text.indexOf("\x1b\\", i + 3);
+			const head = /\x1b_G([^;]*);/.exec(text.slice(i, end === -1 ? text.length : end + 2));
+			const count = Number(/(?:^|,)r=(\d+)/.exec(head?.[1] ?? "")?.[1] ?? 1);
+			for (let k = 0; k < count; k++) if (grid[r + k]) grid[r + k][c] = "#";
+			i = end === -1 ? text.length : end + 2;
+			continue;
+		}
+		if (text[i] === "\x1b") {
+			const csi = /^\x1b\[([0-9;?]*)([A-Za-z])/.exec(text.slice(i));
+			if (csi) {
+				if (csi[1].startsWith("?")) {
+					i += csi[0].length;
+					continue;
+				}
+				const nums = csi[1].split(";").filter(Boolean).map(Number);
+				const n = nums[0] ?? 0;
+				if (csi[2] === "A") r -= Math.max(1, n);
+				else if (csi[2] === "B") r += Math.max(1, n);
+				else if (csi[2] === "C") c += Math.max(1, n);
+				else if (csi[2] === "D") c -= Math.max(1, n);
+				else if (csi[2] === "H") {
+					r = (nums[0] ?? 1) - 1;
+					c = (nums[1] ?? 1) - 1;
+				} else if (csi[2] === "G") c = (nums[0] ?? 1) - 1;
+				else if (csi[2] === "K") grid[r].fill(" ");
+				else if (csi[2] === "J") grid.forEach((row) => row.fill(" "));
+				i += csi[0].length;
+				continue;
+			}
+			i++;
+			continue;
+		}
+		if (text[i] === "\r") {
+			c = 0;
+			i++;
+			continue;
+		}
+		if (text[i] === "\n") {
+			r++;
+			c = 0;
+			i++;
+			continue;
+		}
+		if (grid[r]) grid[r][c] = text[i];
+		c++;
+		i++;
+	}
+	return grid.map((row) => row.join("").replace(/\s+$/, ""));
+}
+
 test("idle cycle mirrors dsh-whale-pet's preview sequence and timing", () => {
 	assert.deepEqual(
 		PET_CYCLES.idle.map((frame) => frame.asset),
@@ -322,41 +389,118 @@ test("the vertical divider is a straight line across the whole strip", () => {
 		const lines = widget.render(40);
 		widget.dispose();
 
-		// The avatar block is the anchor line plus one blank line per remaining
-		// avatar row: pi-tui only reserves a multi-row image when the lines after it
-		// are empty (see `WhalePetWidget.render`). The panel text is drawn by cursor
-		// movement inside the anchor line, so the divider lands once per row.
+		// Every avatar row is its own single-row image line, so the divider lands
+		// once per row and each line reaches it with cursor-forward. The old design
+		// drew the panel inside one multi-row anchor line, which the fullscreen
+		// renderer's per-row clears erased; one image per row is what keeps the
+		// divider straight there.
 		const rows = lines.slice(1);
 		assert.equal(rows.length, AVATAR_MAX_ROWS, `${state}: one row per avatar row`);
-		assert.deepEqual(
-			rows.slice(1),
-			Array(AVATAR_MAX_ROWS - 1).fill(""),
-			`${state}: the trailing rows stay blank so pi-tui reserves the whole image`,
-		);
-		const segments = rows[0].split("\x1b[1B");
-		assert.equal(segments.length, AVATAR_MAX_ROWS, `${state}: the anchor steps down once per row`);
-		assert.ok(
-			segments.every((segment) => segment.includes(`\x1b[${AVATAR_SLOT_COLUMNS}C${DIVIDER_CHAR}`)),
-			`${state}: every row forwards to the slot column before the divider, so it does not zag`,
-		);
-		// The divider must be drawn after the image escape, never over it.
-		assert.ok(
-			rows[0].indexOf(DIVIDER_CHAR) > rows[0].indexOf("\x1b_G"),
-			`${state}: the divider lands past the image`,
-		);
+		for (const row of rows) {
+			assert.match(row, /\x1b_G/, `${state}: the row carries its own image`);
+			assert.ok(
+				row.includes(`\x1b[${AVATAR_SLOT_COLUMNS}C${DIVIDER_CHAR}`),
+				`${state}: the row forwards to the slot column before the divider`,
+			);
+			assert.ok(row.indexOf(DIVIDER_CHAR) > row.indexOf("\x1b_G"), `${state}: the divider lands past the image`);
+		}
 	}
 });
 
-test("a changed frame is redrawn atomically, with no clear after the image", () => {
+test("the frame is sliced into one-row bands that tile the canvas", () => {
+	assert.deepEqual(
+		bandRows(96, 4).map((band) => [band.y, band.height]),
+		[
+			[0, 24],
+			[24, 24],
+			[48, 24],
+			[72, 24],
+		],
+		"four equal bands with no gap or overlap",
+	);
+	assert.deepEqual(
+		bandRows(96, 2).map((band) => [band.y, band.height]),
+		[
+			[0, 48],
+			[48, 48],
+		],
+		"a two-band split covers the canvas too",
+	);
+	const data = loadFrame("idle-awake") ?? "";
+	const escapes = buildBandEscapes(data, 96, 8, 42);
+	assert.equal(escapes.length, AVATAR_MAX_ROWS, "one escape per avatar row");
+	assert.match(escapes[0], /a=T/, "the first row uploads the frame");
+	assert.match(escapes[0], /r=1/, "the first row is a single-row image");
+	assert.match(escapes[1], /a=p/, "later rows place the uploaded frame");
+	assert.match(escapes[1], /y=24,h=24/, "later rows crop the next band");
+	assert.ok(
+		escapes.every((escape) => escape.includes("i=42")),
+		"every row shares the frame id so the terminal replaces it in place",
+	);
+});
+
+test("every avatar row carries its own single-row image", () => {
 	kitty();
-	// Drive the *real* `TuiMainScreen`, not just the widget string: the "stuck
-	// head" bug lived in pi-tui's differential renderer, which clears each changed
-	// line before rewriting it. The widget's own output looks identical either way,
-	// so only a renderer-level assertion can catch a regression here.
+	const widget = makeWidget({ state: "idle", model: "m" });
+	const lines = widget.render(80);
+	widget.dispose();
+
+	// The fix for fullscreen mode: one image per strip line, each `r=1`. A
+	// multi-row image would be erased by the row clear that follows it.
+	const rows = lines.slice(1);
+	assert.equal(rows.length, AVATAR_MAX_ROWS, "one strip line per avatar row");
+	for (const [index, row] of rows.entries()) {
+		assert.match(row, /\x1b_G/, `row ${index}: carries an image`);
+		assert.match(row, /r=1/, `row ${index}: declares a single row`);
+		assert.doesNotMatch(row, /r=[2-9]/, `row ${index}: never spans rows`);
+	}
+});
+
+test("fullscreen keeps every panel row after an image repaint", () => {
+	kitty();
+	// Fullscreen uses Pi's alt-screen renderer, which clears each row before
+	// drawing it. The avatar used to be one multi-row image, so those clears
+	// erased its lower rows — and over SSH (WezTerm not detected, so the
+	// clear-before-draw path is skipped) the panel with them. This drives the
+	// real renderer with TERM_PROGRAM unset, the SSH shape that reproduced it.
+	const previous = process.env.TERM_PROGRAM;
+	delete process.env.TERM_PROGRAM;
 	const writes = [];
 	const terminal = {
-		columns: 80,
-		rows: 24,
+		columns: 60,
+		rows: 12,
+		write: (data) => writes.push(data),
+		hideCursor() {},
+		showCursor() {},
+		start() {},
+		stop() {},
+	};
+	const screen = new TuiAltScreen(terminal);
+	screen.altScreenActive = true;
+	screen.imageProtocol = "kitty";
+	const widget = makeWidget({ state: "idle", model: "m" }, screen);
+	screen.addChild(widget);
+	screen.doRender();
+	// A repaint that carries an image is the frame the bug appeared on.
+	widget.update({ state: "working", stats: { ...DEFAULT_STATS, inputTokens: 11_000 } });
+	screen.doRender();
+	widget.dispose();
+	if (previous === undefined) delete process.env.TERM_PROGRAM;
+	else process.env.TERM_PROGRAM = previous;
+
+	const grid = altScreenText(writes, 60, 12).join("\n");
+	assert.match(grid, /🐳 m/, "the identity row survives fullscreen");
+	assert.match(grid, /1\.4%/, "the gauge row survives fullscreen");
+	assert.match(grid, /⚡99\.8%/, "the usage row survives fullscreen");
+	assert.match(grid, /📂/, "the location row survives fullscreen");
+});
+
+test("regular (main-screen) mode keeps every panel row too", () => {
+	kitty();
+	const writes = [];
+	const terminal = {
+		columns: 60,
+		rows: 12,
 		write: (data) => writes.push(data),
 		hideCursor() {},
 		showCursor() {},
@@ -366,24 +510,16 @@ test("a changed frame is redrawn atomically, with no clear after the image", () 
 	const screen = new TuiMainScreen(terminal);
 	const widget = makeWidget({ state: "idle", model: "m" }, screen);
 	screen.addChild(widget);
-
-	// First render establishes the previous buffer (a full render, so no per-line clears).
 	screen.doRender();
-	writes.length = 0;
-
-	// `agent_settled` changes the state *and* the stats in one update — the exact
-	// frame that used to lose the avatar's lower rows.
 	widget.update({ state: "working", stats: { ...DEFAULT_STATS, inputTokens: 11_000 } });
 	screen.doRender();
 	widget.dispose();
 
-	const output = writes.join("");
-	const drawAt = output.indexOf("f=100");
-	assert.ok(drawAt > -1, "the new frame is transmitted");
-	// pi-tui must clear the whole reserved block *before* drawing the image across
-	// it. A clear after the escape detaches the lower rows and reproduces the bug.
-	assert.equal(output.indexOf("\x1b[2K", drawAt), -1, "nothing clears the image after it is drawn");
-	assert.ok(output.lastIndexOf("\x1b[2K") < drawAt, "the block is cleared before the frame is drawn");
+	const grid = altScreenText(writes, 60, 12).join("\n");
+	assert.match(grid, /🐳 m/, "the identity row survives regular mode");
+	assert.match(grid, /1\.4%/, "the gauge row survives regular mode");
+	assert.match(grid, /⚡99\.8%/, "the usage row survives regular mode");
+	assert.match(grid, /📂/, "the location row survives regular mode");
 });
 
 test("the text-only strip draws no divider", () => {
@@ -547,12 +683,11 @@ test("the tide panel groups identity, gauge, meter, and location", () => {
 	assert.match(text, /α/, "extension statuses still ride the location row");
 });
 
-test("a short avatar block pushes the rest of the panel below it", () => {
+test("the strip keeps one row per avatar row whatever the cell shape", () => {
 	kitty();
-	// Tall, narrow cells scale a square frame to two rows instead of four. The
-	// image block can only ever reserve its own rows, so the panel's lower rows
-	// must fall back to ordinary text below the block instead of vanishing — the
-	// regression that made only the strip's head show over SSH.
+	// Tall, narrow cells used to scale a square frame to fewer than four rows,
+	// which dropped panel rows. The avatar is now always one single-row image per
+	// strip line, so the strip height never depends on the cell aspect ratio.
 	setCellDimensions({ widthPx: 8, heightPx: 40 });
 	const widget = new WhalePetWidget(TUI, THEME, {
 		state: "working",
@@ -563,11 +698,11 @@ test("a short avatar block pushes the rest of the panel below it", () => {
 	const lines = widget.render(90);
 	widget.dispose();
 	setCellDimensions({ widthPx: 9, heightPx: 18 });
-	assert.equal(lines.length, 5, "the rule plus one line per panel row, whatever the block height");
+	assert.equal(lines.length, 5, "the rule plus one line per avatar row");
 	const text = lines.join("\n");
-	assert.match(text, /1\.4%/, "the gauge survives a short block");
-	assert.match(text, /⚡99\.8%/, "the usage meter survives a short block");
-	assert.match(text, /📂/, "the location row survives a short block");
+	assert.match(text, /1\.4%/, "the gauge survives tall cells");
+	assert.match(text, /⚡99\.8%/, "the usage meter survives tall cells");
+	assert.match(text, /📂/, "the location row survives tall cells");
 });
 
 test("buildTideBar fills, shades cache, and rides the foam", () => {

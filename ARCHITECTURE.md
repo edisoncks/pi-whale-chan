@@ -169,12 +169,12 @@ capture is in place before the widget factory runs. Three pi-tui properties
 decide the rendering strategy, and each one is a trap that a naive
 `HStack(Image, Text)` walks straight into:
 
-- **The image reports zero visible width.** `Image.render()` returns the Kitty
-escape sequence on one line and blank lines for the rest; a stripped escape
-sequence measures zero cells. `HStack` therefore believes the avatar is zero
-columns wide and would draw the panel text *on top of* the artwork. The strip
-computes the avatar's cell box itself (`fitCells`, mirroring pi-tui's unexported
-`calculateImageCellSize`) and reserves the column by hand.
+- **The image reports zero visible width.** A Kitty escape sequence measures
+zero cells once stripped, so `HStack` believes the avatar is zero columns wide
+and would draw the panel text *on top of* the artwork. The strip emits its own
+one-line-per-row escapes (`buildBandEscapes`) and computes the avatar's cell box
+itself (`fitCells`, mirroring pi-tui's unexported `calculateImageCellSize`), then
+reserves the column by hand.
 - **Reserving the column with spaces would repaint the artwork.** Printing N
 spaces to advance the cursor also paints N cells, and the image's anchor row sits
 exactly there. The strip uses CSI cursor-forward (`ESC[nC`) instead, which moves
@@ -183,12 +183,14 @@ the cursor without painting anything.
 `moveUp + sequence` there, so the image would be painted over text already
 written on the preceding rows. Rather than ship a scrambled strip, the widget
 renders a text-only status line unless `getCapabilities().images === "kitty"`.
-- **A multi-row image only survives if its trailing rows are blank.** pi-tui
-reserves an image's full height and redraws it as one block only when the lines
-after the escape are empty; if they hold text, it clears each row individually
-(`ESC[2K`), which detaches the image and leaves its top row. The panel is
-therefore drawn by cursor movement inside the anchor line, not on the avatar's
-trailing rows — see "Why the panel is drawn inside the image line".
+- **A multi-row image is only safe in the regular renderer, not fullscreen.**
+pi-tui's main-screen renderer reserves an image's full height and redraws it as
+one block only when the lines after the escape are empty. Its fullscreen
+(alt-screen) renderer clears each row individually instead; a clear over a
+covered row detaches the image's lower cells (WezTerm erases them), so a
+multi-row avatar lost its lower rows. The avatar is therefore emitted as one
+**single-row** image per strip line — see "Why every strip line is its own
+single-row image".
 - **The strip must read as part of the input box, not as a floating banner.**
 A separator is drawn above it using the editor's own glyph (`─`) and its
 thinking-level colour. pi-tui's editor paints `"─".repeat(width)` with
@@ -258,29 +260,36 @@ widget's column maths keys off it). `test/pet.test.mjs` binds them: it pins the
 upstream frame order and timing, checks every asset exists and keeps its alpha
 channel, and asserts the text column is reserved with cursor-forward.
 
-**Why every frame shares one Kitty image id.** pi-tui's `imageId` option is
-documented for animations: reusing the id makes the terminal *replace* the placed
-image instead of accumulating one placement per frame.
+**Why every strip line is its own single-row image.** The avatar used to be a
+single multi-row Kitty image anchored on the strip's first line, with the panel
+drawn inside that line by relative cursor movement. That survives Pi's regular
+(main-screen) renderer, which reserves a multi-row image as one atomic block, but
+not its fullscreen (alt-screen) renderer: the alt-screen clears each row
+individually before drawing it, and a clear over a covered row detaches the
+image's lower cells — WezTerm erases them outright, leaving only the avatar's
+head. Over SSH the strip is four rows tall, so the trailing panel rows were the
+ones being cleared and the whole strip collapsed to its first line.
 
-**Why the panel is drawn inside the image line.** pi-tui clears every changed line
-with `ESC[2K` before rewriting it, and it treats a multi-row image as a reserved
-block *only* when the lines after the escape are empty — then it clears those rows
-itself and draws the image across them. The avatar is a four-row image, but the
-four-line status panel used to sit on those trailing rows; because
-`agent_settled` updates the state and the stats together, the frame and the panel
-changed in the same render, pi-tui erased the trailing rows one by one, detaching
-the image from their cells and leaving only its top row — the "stuck head" bug,
-which reproduced on Kitty and WezTerm alike (a renderer issue, not a terminal
-one). The widget now emits the frame on its first line, blank lines for the rest
-(so pi-tui reserves the whole block and redraws it atomically), and draws the
-panel rows *inside* that anchor line with `ESC[1B` and cursor-forward, so nothing
-clears the image after it is drawn. Every blank line and cursor step is measured
-in the *image's own* row count — the number pi-tui reads back out of the escape —
-never in the panel height, so the reserved block and the drawn block can never
-disagree (a trailing line past the block would be cleared individually and the
-bug would return). The widget also re-checks that the first line really carries a
-Kitty escape and falls back to the text-only strip otherwise, rather than drawing
-a divider beside a blank tail.
+The avatar is now cut into `AVATAR_MAX_ROWS` **single-row** images, one per strip
+line, each a source-cropped slice of the frame (`y`/`h` on the Kitty command; the
+first line uploads the frame and the later lines are placement-only `a=p`
+commands with a distinct placement id, so the payload ships once per frame). A
+one-row image can only ever cover its own row, so no neighbouring row's clear can
+erase it. Every row shares one image id per frame asset, so the terminal replaces
+the frame's pixels in place instead of accumulating one image per animation tick.
+`buildBandEscapes` and `bandRows` are exported so `test/pet.test.mjs` can pin the
+tiling and the single-row escape shape.
+
+**Why each avatar row reaches its own divider with cursor-forward.** Every strip
+line still reserves the text column by hand, because a stripped Kitty escape has
+a visible width of zero and `HStack` would lay the panel over the artwork. The
+divider is reached with `ESC[nC` (cursor-forward), never spaces: forward moves
+the cursor without painting, so the image cell cannot be repainted by the column
+reservation. The centring inset is printed before the escape, which occupies
+cells the image does not cover. `test/pet.test.mjs` drives the real `TuiAltScreen`
+with `TERM_PROGRAM` unset (the SSH shape that reproduced the bug) and asserts
+every panel row survives the per-row clears, then does the same against
+`TuiMainScreen` so regular mode cannot regress.
 
 **Why the pet has its own switch.** The persona is a prompt and style concern;
 the strip is a display preference. Coupling them would mean you could not keep
