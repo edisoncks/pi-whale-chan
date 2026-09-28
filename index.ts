@@ -40,7 +40,7 @@ import {
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import { WHALE_PERSONA, WHALE_VOICE_RULE, WHALE_TAIL_ANCHOR } from "./persona.js";
-import { WhalePetWidget, type PetFooterData, type PetStats } from "./pet.js";
+import { WhalePetWidget, type PetFooterData, type PetStats, type PetStyle } from "./pet.js";
 
 const SECTION_NAME = "whale_persona";
 const STATE_FILE = "whale-chan.json";
@@ -98,9 +98,11 @@ export interface WhaleConfig {
 	enabled: boolean;
 	/** Whether the animated pet strip is shown above the editor, replacing the built-in footer. */
 	pet: boolean;
+	/** Status-panel layout: `tide` (shipped) or the footer-faithful `parity`. */
+	petStyle: PetStyle;
 }
 
-const DEFAULT_CONFIG: WhaleConfig = { enabled: true, pet: true };
+const DEFAULT_CONFIG: WhaleConfig = { enabled: true, pet: true, petStyle: "tide" };
 
 // Single parse: absent keys read as their defaults, bad values flag corrupt.
 // Pure read: never writes, warns, or notifies. Why no existsSync: stat-then-read
@@ -124,13 +126,14 @@ function loadConfig(): { config: WhaleConfig; corrupt: boolean } {
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
 		return { config: { ...DEFAULT_CONFIG }, corrupt: true };
 	}
-	const record = raw as { enabled?: unknown; pet?: unknown };
+	const record = raw as { enabled?: unknown; pet?: unknown; petStyle?: unknown };
 	// Each key is validated independently, so one bad value cannot discard a good
 	// sibling. An absent key is not corruption: it is a first run, or a config
 	// written before that key existed.
 	let corrupt = false;
 	let enabled = DEFAULT_CONFIG.enabled;
 	let pet = DEFAULT_CONFIG.pet;
+	let petStyle = DEFAULT_CONFIG.petStyle;
 	if (record.enabled !== undefined) {
 		if (typeof record.enabled === "boolean") enabled = record.enabled;
 		else corrupt = true;
@@ -139,7 +142,11 @@ function loadConfig(): { config: WhaleConfig; corrupt: boolean } {
 		if (typeof record.pet === "boolean") pet = record.pet;
 		else corrupt = true;
 	}
-	return { config: { enabled, pet }, corrupt };
+	if (record.petStyle !== undefined) {
+		if (record.petStyle === "parity" || record.petStyle === "tide") petStyle = record.petStyle;
+		else corrupt = true;
+	}
+	return { config: { enabled, pet, petStyle }, corrupt };
 }
 
 // Returns null on success, otherwise a human-readable reason (never throws).
@@ -321,6 +328,7 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	// source of truth for config.
 	let enabled = true;
 	let petEnabled = true;
+	let petStyle: PetStyle = DEFAULT_CONFIG.petStyle;
 	// Assigned by the widget factory Pi invokes from `setWidget`; null while the
 	// strip is unmounted. That factory runs once per mount, so this stays the
 	// single live instance the lifecycle handlers poke.
@@ -362,6 +370,7 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 					model: modelLabel(ctx.model),
 					thinkingLevel: ctx.thinkingLevel ?? "off",
 					stats: petStats(ctx, usageAcc),
+					style: petStyle,
 				},
 				petFooterData,
 			);
@@ -385,6 +394,7 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 		const { config, corrupt } = loadConfig();
 		enabled = config.enabled;
 		petEnabled = config.pet;
+		petStyle = config.petStyle;
 		if (corrupt) {
 			ctx.ui.notify("[whale-chan] corrupt config: invalid values reset to defaults", "warning");
 			const persistError = saveConfig(config);
@@ -514,7 +524,7 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 	pi.registerCommand("whale", {
 		description: "Toggle the DeepSeek whale-chan persona and the animated pet strip",
 		getArgumentCompletions: (prefix: string) => {
-			const options = ["on", "off", "toggle", "status", "pet on", "pet off", "pet toggle"];
+			const options = ["on", "off", "toggle", "status", "pet on", "pet off", "pet toggle", "pet style", "pet style tide", "pet style parity"];
 			return options.filter((o) => o.startsWith(prefix)).map((value) => ({ value, label: value }));
 		},
 		handler: async (args, ctx) => {
@@ -522,9 +532,28 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 
 			if (arg === "status") {
 				ctx.ui.notify(
-					`whale-chan persona: ${enabled ? "on" : "off"} · pet: ${petEnabled ? "on" : "off"}`,
+					`whale-chan persona: ${enabled ? "on" : "off"} · pet: ${petEnabled ? "on" : "off"} · style: ${petStyle}`,
 					"info",
 				);
+				return;
+			}
+
+			// `/whale pet style <tide|parity>`: the same data in two layouts. A display
+			// preference like the pet switch, so it persists to disk too.
+			if (arg === "pet style" || arg.startsWith("pet style ")) {
+				const name = arg.slice("pet style".length).trim();
+				if (name !== "tide" && name !== "parity") {
+					ctx.ui.notify("Usage: /whale pet style [tide|parity]", "warning");
+					return;
+				}
+				petStyle = name;
+				const stylePersistError = saveConfig({ enabled, pet: petEnabled, petStyle });
+				if (stylePersistError) {
+					ctx.ui.notify(`[whale-chan] could not persist setting: ${stylePersistError}`, "warning");
+					return;
+				}
+				petWidget?.update({ style: petStyle });
+				ctx.ui.notify(`whale-chan pet style: ${petStyle}`, "info");
 				return;
 			}
 
@@ -532,7 +561,7 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 			// persona, so turning the persona off must not hide the pet.
 			if (arg === "pet" || arg === "pet on" || arg === "pet off" || arg === "pet toggle") {
 				petEnabled = arg === "pet on" ? true : arg === "pet off" ? false : !petEnabled;
-				const petPersistError = saveConfig({ enabled, pet: petEnabled });
+				const petPersistError = saveConfig({ enabled, pet: petEnabled, petStyle });
 				if (petPersistError) {
 					ctx.ui.notify(`[whale-chan] could not persist setting: ${petPersistError}`, "warning");
 					return;
@@ -553,11 +582,11 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 			} else if (arg === "off") {
 				enabled = false;
 			} else {
-				ctx.ui.notify("Usage: /whale [on|off|toggle|status|pet on|pet off]", "warning");
+				ctx.ui.notify("Usage: /whale [on|off|toggle|status|pet on|pet off|pet style]", "warning");
 				return;
 			}
 
-			const persistError = saveConfig({ enabled, pet: petEnabled });
+			const persistError = saveConfig({ enabled, pet: petEnabled, petStyle });
 			if (persistError) {
 				ctx.ui.notify(`[whale-chan] could not persist setting: ${persistError}`, "warning");
 				return;

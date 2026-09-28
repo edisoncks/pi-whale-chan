@@ -93,12 +93,21 @@ export interface PetViewModel {
 	readonly thinkingLevel: PetThinkingLevel;
 	/** Session stats for the status panel; absent before the host wires them up. */
 	readonly stats?: PetStats;
+	/**
+	 * Panel layout. The extension ships `tide`; the widget falls back to the
+	 * footer-faithful `parity` layout when constructed without one.
+	 */
+	readonly style?: PetStyle;
 }
 
+/** The status-panel layouts `/whale pet style` switches between. */
+export type PetStyle = "parity" | "tide";
+
 /**
- * Snapshot of the session stats the status panel renders. The four-line layout
- * mirrors pi-emote's info panel: model/level/window, context progress,
- * token+cost totals, and the working directory.
+ * Snapshot of the session stats the status panel renders. The `parity` layout
+ * mirrors pi-emote's info panel (model/level/window, context progress,
+ * token+cost totals, working directory); the `tide` layout regroups the same
+ * data into identity / gauge / meter / location.
  */
 export interface PetStats {
 	/** Whether the model reasons; controls the thinking-level suffix. */
@@ -358,6 +367,58 @@ export function buildProgressBar(stats: PetStats): string {
 	return `⏵▕${bar}▏ ${tokens} (${percent.toFixed(1)}%)`;
 }
 
+/**
+ * Foam frames for the tide waterline pulse. The empty entries let the ripple
+ * fade in and out; index 0 is flat water, what an idle pet shows.
+ */
+export const TIDE_FOAM_FRAMES = ["", "≈", "~", "≈", ""] as const;
+
+/** Slow cadence for the text-only waterline pulse (the avatar keeps its own). */
+const TIDE_PULSE_MS = 300;
+
+/**
+ * Context bar for the `tide` panel: fresh input as `█`, cached prompt as `░`,
+ * a horizontal eighth-block leading edge, and a one-cell foam glyph riding the
+ * waterline (`foam` = "" for calm). Same data as `buildProgressBar`, without the
+ * brackets, so the row can share its width with a right-aligned percentage.
+ */
+export function buildTideBar(stats: PetStats, cells: number, foam = ""): string {
+	if (cells <= 0) return "";
+	const percent = Math.max(0, Math.min(100, stats.contextPercent ?? 0));
+	const totalSubs = cells * 8;
+	const filledSubs = percent === 0 ? 0 : Math.max(1, Math.round((percent / 100) * totalSubs));
+	const cacheRatio = Math.max(0, Math.min(1, (stats.cacheHitRate ?? 0) / 100));
+	const cacheSubs = Math.round(filledSubs * cacheRatio);
+	const out: string[] = [];
+	for (let i = 0; i < cells; i++) {
+		const start = i * 8;
+		const end = start + 8;
+		const cacheIn = Math.max(0, Math.min(cacheSubs, end) - start);
+		const inputIn = Math.max(0, Math.min(filledSubs, end) - Math.max(cacheSubs, start));
+		const filled = cacheIn + inputIn;
+		if (filled >= 8) out.push(inputIn > 0 ? "█" : "░");
+		else if (filled > 0) out.push(EIGHTH_BLOCKS[filled - 1] as string);
+		else out.push(" ");
+	}
+	if (foam.length > 0) {
+		const edge = out.indexOf(" ");
+		if (edge !== -1) out[edge] = foam;
+	}
+	return out.join("");
+}
+
+/**
+ * Compose `left` and `right` on one line with `right` pinned to `budget`
+ * columns. When the pair cannot fit with a gap, the right side is dropped so
+ * the leading content survives; the caller truncates whatever remains.
+ */
+function splitLine(left: string, right: string, budget: number, gap = 2): string {
+	if (right.length === 0) return left;
+	const space = budget - visibleWidth(left) - visibleWidth(right);
+	if (space < gap) return left;
+	return left + " ".repeat(space) + right;
+}
+
 /** Replace a leading home directory with `~`, like Pi's own footer. */
 function shortenHome(cwd: string): string {
 	const home = process.env.HOME || process.env.USERPROFILE;
@@ -426,17 +487,21 @@ export class WhalePetWidget implements Component {
 	update(view: Partial<PetViewModel>): void {
 		if (this.closed) return;
 		const next: PetViewModel = { ...this.view, ...view };
+		const styleChanged = next.style !== this.view.style;
 		const changed =
 			next.state !== this.view.state ||
 			next.model !== this.view.model ||
 			next.thinkingLevel !== this.view.thinkingLevel ||
-			next.stats !== this.view.stats;
+			next.stats !== this.view.stats ||
+			styleChanged;
 		if (next.state !== this.view.state) {
 			this.index = 0;
 			this.view = next;
 			this.arm();
 		} else {
 			this.view = next;
+			// A style flip can start or stop the working pulse, so re-arm.
+			if (styleChanged) this.arm();
 		}
 		if (changed) this.tui.requestRender();
 	}
@@ -565,17 +630,28 @@ export class WhalePetWidget implements Component {
 		return image;
 	}
 
+	/** Active panel layout; a standalone widget falls back to the parity mirror. */
+	private style(): PetStyle {
+		return this.view.style ?? "parity";
+	}
+
 	/**
-	 * The four-line status panel beside the avatar. Line 1 carries the model, its
-	 * thinking level, and the context window; line 2 the context progress bar;
-	 * line 3 the token/cost totals; line 4 the working directory. Without a
-	 * `stats` snapshot only the model line is drawn, so a host that has not wired
-	 * the data yet degrades to a readable strip instead of a half-empty one.
+	 * The four-line status panel beside the avatar. `parity` mirrors Pi's footer
+	 * field-for-field; `tide` regroups the same data into identity / gauge /
+	 * meter / location. Without a `stats` snapshot only the identity line is
+	 * drawn, so a host that has not wired the data yet degrades to a readable
+	 * strip instead of a half-empty one.
 	 */
 	private infoLines(width: number, hasAvatar: boolean): string[] {
+		const budget = Math.max(1, width - (hasAvatar ? textColumn() : 0));
+		const lines = this.style() === "tide" ? this.tideLines(budget) : this.parityLines(budget);
+		return lines.map((line) => truncateToWidth(line, budget));
+	}
+
+	/** Footer-faithful layout: model line, context bar, usage, location. */
+	private parityLines(budget: number): string[] {
 		const { model, thinkingLevel, stats } = this.view;
 		const thinking = this.theme.getThinkingBorderColor(thinkingLevel);
-		const budget = Math.max(1, width - (hasAvatar ? textColumn() : 0));
 		// Pi's footer disambiguates the provider only when more than one is
 		// available, and drops the prefix again when the line would not fit, so a
 		// single-provider setup (or a narrow strip) stays uncluttered.
@@ -594,7 +670,70 @@ export class WhalePetWidget implements Component {
 			lines.push(this.theme.fg("dim", this.usageLine(stats)));
 			lines.push(this.theme.fg("warning", this.locationLine(stats)));
 		}
-		return lines.map((line) => truncateToWidth(line, budget));
+		return lines;
+	}
+
+	/**
+	 * The `tide` layout: identity with the provider/level pinned right, a context
+	 * gauge whose waterline ripples while a turn runs, a usage meter with the cost
+	 * pinned right, and a location line led by the git branch. Four rows, so it
+	 * stays level with the four-row avatar.
+	 */
+	private tideLines(budget: number): string[] {
+		const { model, thinkingLevel, stats } = this.view;
+		const thinking = this.theme.getThinkingBorderColor(thinkingLevel);
+		// Row 1: identity. Provider owns the corner (always worth showing there);
+		// the level only when the model reasons, matching Pi's footer.
+		let meta = stats?.provider ?? "";
+		if (stats?.reasoning) meta += (meta ? " · " : "") + thinkingLevel;
+		let identity = this.theme.bold(thinking(`🐳 ${model}`));
+		if (meta) identity = splitLine(identity, this.theme.fg("dim", meta), budget);
+		const lines = [identity];
+		if (!stats) return lines;
+		// Row 2: context gauge. Percent and window are pinned right so the
+		// waterline can breathe without the numbers drifting.
+		const percent = stats.contextPercent ?? 0;
+		const color = resolveProgressColor(percent, stats.cacheHitRate ?? 0);
+		const tokens = stats.contextTokens !== null ? formatTokens(stats.contextTokens) : "?";
+		const percentText = stats.contextPercent !== null ? `${percent.toFixed(1)}%` : "?";
+		const rightMeta = `${percentText}  ${tokens}/${formatTokens(stats.contextWindow)}`;
+		const barCells = Math.max(1, budget - visibleWidth(rightMeta) - 2);
+		const foam =
+			this.view.state === "working"
+				? (TIDE_FOAM_FRAMES[this.index % TIDE_FOAM_FRAMES.length] as string)
+				: "";
+		const bar = this.theme.fg(color, buildTideBar(stats, barCells, foam));
+		lines.push(splitLine(bar, this.theme.fg("dim", rightMeta), budget));
+		// Row 3: usage meter, cost pinned right.
+		const cost = stats.cost > 0 ? `🍚 ${stats.cost.toFixed(3)}` : "";
+		lines.push(splitLine(this.theme.fg("dim", this.usageMeter(stats)), this.theme.fg("dim", cost), budget));
+		// Row 4: location, branch first because it is the field that changes.
+		lines.push(this.tideLocation(stats));
+		return lines;
+	}
+
+	/** `↑in ↓out · R… W… · ⚡hit%` for the tide meter row. */
+	private usageMeter(stats: PetStats): string {
+		let meter = `↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`;
+		if (stats.cacheRead > 0 || stats.cacheWrite > 0) {
+			meter += ` · R${formatTokens(stats.cacheRead)} W${formatTokens(stats.cacheWrite)}`;
+		}
+		if (stats.cacheHitRate !== null && (stats.cacheRead > 0 || stats.cacheWrite > 0)) {
+			meter += ` · ⚡${stats.cacheHitRate.toFixed(1)}%`;
+		}
+		return meter;
+	}
+
+	/** `⑂ branch · cwd · session · statuses` for the tide location row. */
+	private tideLocation(stats: PetStats): string {
+		const parts: string[] = [];
+		const branch = this.footerData?.getGitBranch();
+		if (branch) parts.push(this.theme.fg("accent", `⑂ ${branch}`));
+		parts.push(this.theme.fg("dim", shortenHome(stats.cwd)));
+		if (stats.sessionName) parts.push(this.theme.fg("muted", stats.sessionName));
+		const statuses = this.footerData ? formatStatuses(this.footerData.getExtensionStatuses()) : "";
+		if (statuses.length > 0) parts.push(this.theme.fg("warning", statuses));
+		return parts.join(" · ");
 	}
 
 	/**
@@ -636,18 +775,24 @@ export class WhalePetWidget implements Component {
 	private arm(): void {
 		if (this.timer !== undefined) clearTimeout(this.timer);
 		this.timer = undefined;
-		if (this.closed || !this.withAvatar) return;
+		if (this.closed) return;
 		const cycle = PET_CYCLES[this.view.state];
 		const frame = cycle[this.index % cycle.length];
-		if (frame === undefined || cycle.length <= 1) return;
+		const advancing = this.withAvatar && frame !== undefined && cycle.length > 1;
+		// Text-only strips have no avatar to animate, but the tide waterline still
+		// ripples while a turn runs; that needs its own (slower) timer.
+		const pulsing =
+			!advancing && this.style() === "tide" && this.view.state === "working" && this.view.stats !== undefined;
+		if (!advancing && !pulsing) return;
+		const delay = advancing && frame !== undefined ? frame.durationMs : TIDE_PULSE_MS;
 		this.timer = setTimeout(() => {
 			this.timer = undefined;
 			if (this.closed) return;
 			const current = PET_CYCLES[this.view.state];
-			this.index = (this.index + 1) % current.length;
+			this.index = advancing ? (this.index + 1) % current.length : this.index + 1;
 			this.tui.requestRender();
 			this.arm();
-		}, frame.durationMs);
+		}, delay);
 		this.timer.unref?.();
 	}
 }

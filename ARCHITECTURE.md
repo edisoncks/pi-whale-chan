@@ -215,17 +215,26 @@ cursor-forward. Everything left of the text comes from one function,
 `textColumn()`, so the rendered indent and the truncation budget cannot drift
 apart.
 **Why the status panel looks the way it does, and what it cannot carry.** The
-four lines beside the avatar mirror Pi's own footer: `(provider name) model •
-level • window`; a context progress bar; `↑in ↓out R… W… CH…% $cost`; and
-`cwd (branch) • sessionName` plus any `ui.setStatus` entries. The first three
-are the info panel of
-[pi-emote](https://github.com/cgxeiji/pi-emote) grown to footer parity. `index.ts`
-builds one snapshot (`petStats`) from `ctx` and refreshes it on `agent_start`,
-every `message_end`, `agent_settled`, `session_info_changed`, and on
-`thinking_level_select`/`model_select`; the branch and statuses come from the
+four lines beside the avatar come in two layouts, chosen by `/whale pet style`:
+
+- `tide` (default): identity (`🐳 model`, provider + thinking level pinned
+  right); a context gauge whose eighth-block waterline ripples with a foam glyph
+  while a turn runs; a usage meter (`↑in ↓out · R… W… · ⚡hit%`) with the cost
+  pinned right as the `🍚` rice counter; and a location row led by the git
+  branch, then cwd, session name, and `ui.setStatus` entries.
+- `parity`: the footer-faithful mirror — `(provider name) model • level •
+  window`; a context progress bar; `↑in ↓out R… W… CH…% $cost`; and
+  `cwd (branch) • sessionName` plus statuses. The first three are the info panel
+  of [pi-emote](https://github.com/cgxeiji/pi-emote) grown to footer parity.
+
+`index.ts` builds one snapshot (`petStats`) from `ctx` and refreshes it on
+`agent_start`, every `message_end`, `agent_settled`, `session_info_changed`, and
+on `thinking_level_select`/`model_select`; the branch and statuses come from the
 `footerData` the footer factory receives, and the branch subscription redraws on
-checkout. A missing snapshot is not an error: the panel falls back to the model
-line alone, which is what the text-only path renders.
+checkout. The provider is rendered as its display name
+(`ctx.modelRegistry.getProviderDisplayName`), not the raw id. A missing snapshot
+is not an error: the panel falls back to the identity line alone, which is what
+the text-only path renders.
 
 Three footer fields are deliberately absent because the extension API does not
 expose them: the auto-compaction `(auto)` marker

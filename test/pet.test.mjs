@@ -53,9 +53,11 @@ const {
 	DIVIDER_CHAR,
 	PET_CYCLES,
 	RULE_CHAR,
+	TIDE_FOAM_FRAMES,
 	WhalePetWidget,
 	avatarInset,
 	buildProgressBar,
+	buildTideBar,
 	fitCells,
 	formatStatuses,
 	formatTokens,
@@ -536,6 +538,46 @@ test("the info panel renders the four stat lines", () => {
 	assert.match(text, /~\/repos\/pi-emote/, "the cwd, home-abbreviated");
 });
 
+test("the tide panel groups identity, gauge, meter, and location", () => {
+	kitty();
+	const footerData = makeFooterData({
+		getGitBranch: () => "feat/pet-footer",
+		getExtensionStatuses: () => new Map([["a", "α"]]),
+	});
+	const widget = new WhalePetWidget(
+		TUI,
+		THEME,
+		{
+			state: "idle",
+			thinkingLevel: "high",
+			model: "DeepSeek V4.1 Flash",
+			stats: { ...DEFAULT_STATS, provider: "OpenCode Go" },
+			style: "tide",
+		},
+		footerData,
+	);
+	const text = widget.render(120).join("\n");
+	widget.dispose();
+	assert.match(text, /🐳 DeepSeek V4\.1 Flash/, "the whale leads the identity row");
+	assert.match(text, /OpenCode Go · high/, "the provider display name and level are pinned right");
+	assert.match(text, /1\.4%/, "the context percentage is on the gauge row");
+	assert.match(text, /⚡99\.8%/, "the cache hit rate uses the bolt");
+	assert.match(text, /🍚 0\.003/, "the cost is the rice counter");
+	assert.match(text, /⑂ feat\/pet-footer/, "the branch leads the location row");
+	assert.match(text, /α/, "extension statuses still ride the location row");
+});
+
+test("buildTideBar fills, shades cache, and rides the foam", () => {
+	const stats = { ...DEFAULT_STATS, contextPercent: 50, cacheHitRate: 40 };
+	const calm = buildTideBar(stats, 20, "");
+	assert.equal(calm.length, 20, "the bar occupies exactly the requested cells");
+	assert.match(calm, /█/, "fresh input is a full block");
+	assert.match(calm, /░/, "cached prompt is a shade");
+	const foam = buildTideBar(stats, 20, "≈");
+	assert.match(foam, /≈/, "the foam glyph rides the waterline");
+	assert.ok(TIDE_FOAM_FRAMES.includes("≈"), "the foam has a pulse frame");
+});
+
 test("statuses are sorted by key and stripped to one line", () => {
 	assert.equal(sanitizeStatusText(" a\n b\t c "), "a b c", "newlines and tabs fold to single spaces");
 	assert.equal(
@@ -697,8 +739,7 @@ test("the strip mounts on session_start and follows the agent lifecycle", async 
 	assert.ok(widgets.has("whale_pet"), "the strip mounts above the editor, not in the footer");
 
 	const widget = mount({ widgets, footers, footerData });
-	assert.match(widget.render(80).join("\n"), /M/, "the model name is on the strip");
-	assert.match(widget.render(80).join("\n"), /⏵▕/, "the stats panel is drawn");
+	assert.match(widget.render(80).join("\n"), /🐳 M/, "the tide identity row is on the strip");
 
 	await handlers.get("agent_start")({ type: "agent_start" }, ctx);
 	assert.ok(
@@ -790,7 +831,7 @@ test("the strip above the editor carries the footer's git branch", async () => {
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	const widget = mount({ widgets, footers, footerData });
-	assert.match(widget.render(120).join("\n"), / \(feat\/pet-footer\)/, "footerData reaches the widget");
+	assert.match(widget.render(120).join("\n"), /⑂ feat\/pet-footer/, "footerData reaches the widget");
 	widget.dispose();
 });
 
@@ -801,7 +842,30 @@ test("the strip shows the provider display name, not its id", async () => {
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	const widget = mount({ widgets, footers, footerData });
-	assert.match(widget.render(120).join("\n"), /\(OpenCode Go\) M/, "the provider id is rendered as its display name");
+	const text = widget.render(120).join("\n");
+	assert.match(text, /OpenCode Go/, "the provider display name is shown");
+	assert.doesNotMatch(text, /opencode-go/, "the raw provider id is not");
+	widget.dispose();
+});
+
+test("/whale pet style switches the layout and persists", async () => {
+	kitty();
+	const { handlers, commands, widgets, footers, footerData, ctx } = makeExtensionHarness();
+	await handlers.get("session_start")({ type: "session_start" }, ctx);
+	let widget = mount({ widgets, footers, footerData });
+	assert.match(widget.render(120).join("\n"), /🐳 M/, "the shipped default is the tide layout");
+	widget.dispose();
+
+	await commands.get("whale").handler("pet style parity", ctx);
+	assert.equal(JSON.parse(readFileSync(STATE_PATH, "utf8")).petStyle, "parity", "the choice is persisted");
+	widget = mount({ widgets, footers, footerData });
+	assert.match(widget.render(120).join("\n"), /⏵▕/, "parity renders the footer-faithful bar");
+	assert.doesNotMatch(widget.render(120).join("\n"), /🐳/, "the tide whale is gone");
+	widget.dispose();
+
+	await commands.get("whale").handler("pet style tide", ctx);
+	widget = mount({ widgets, footers, footerData });
+	assert.match(widget.render(120).join("\n"), /🐳 M/, "tide comes back");
 	widget.dispose();
 });
 
