@@ -61,6 +61,14 @@ background, so their frames are fully opaque — measured `opaque: True` with a
 corner pixel of `rgb(220,236,247)`. They are not usable as a source for an image
 that must sit on an arbitrary terminal background.
 
+## Demo recording
+
+`assets/whale-chan-demo.mp4` and its poster `assets/whale-chan-demo-poster.webp` are a screen
+capture of this extension running in Pi, recorded by the project maintainer. The capture was
+re-encoded for the repository: 928×672, 15 fps, H.264 CRF 28, `+faststart`, and the (digitally
+silent) AAC track dropped. It *shows* the CC-BY-4.0 pet artwork listed above and the community fan
+character, but introduces no third-party artwork of its own.
+
 ## Not covered here
 
 The whale-chan *character* is a community fan creation whose design credits

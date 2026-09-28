@@ -14,6 +14,20 @@
 
 开启之后，Pi 就不再是那个一本正经的助手了。它会回嘴、甩尾巴、管你叫「主人」，而且活儿照样干得漂亮。你用哪种语言，它就用哪种语言回复——连动作描写也一样。
 
+## 演示
+
+<p align="center">
+  <a href="assets/whale-chan-demo.mp4">
+    <img src="assets/whale-chan-demo-poster.webp" alt="Pi 编辑器上方的鲸鱼娘动态状态栏" width="760">
+  </a>
+  <br>
+  ▶ <a href="assets/whale-chan-demo.mp4">观看 28 秒演示</a> <sub>（MP4，234 KB，无音轨）</sub>
+</p>
+
+<!-- github.com 会清洗掉 src 指向仓库内相对路径的 <video> 标签，所以上面放的是链接到视频的封面图。
+     想在 github.com 上直接内嵌播放器，请在 GitHub 网页编辑器中把 assets/whale-chan-demo.mp4
+     拖进本文件，再把生成的 user-attachment 链接单独放成一段——GitHub 会把它渲染成真正的播放器。 -->
+
 ## 安装
 
 ```bash

@@ -2,3 +2,7 @@ node_modules/
 *.tsbuildinfo
 .DS_Store
 eval/results/
+
+# Raw screen capture (4.5 MB). The README embeds the compressed
+# assets/whale-chan-demo.mp4 instead; keep the master out of git.
+assets/whale-chan-recording.mp4

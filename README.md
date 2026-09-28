@@ -17,6 +17,21 @@ Turn it on and Pi stops sounding like a plain assistant. It talks back, flicks
 its tail, calls you "Master", and still does the actual work. It replies in
 whatever language you write in — stage directions and all.
 
+## Demo
+
+<p align="center">
+  <a href="assets/whale-chan-demo.mp4">
+    <img src="assets/whale-chan-demo-poster.webp" alt="Whale-chan's animated pet strip running above Pi's editor" width="760">
+  </a>
+  <br>
+  ▶ <a href="assets/whale-chan-demo.mp4">Watch the 28-second demo</a> <sub>(MP4, 234 KB, no audio)</sub>
+</p>
+
+<!-- github.com strips <video> tags whose src is a repo-relative path, so the demo above is a poster
+     that links to the file. For an inline player on github.com, drag assets/whale-chan-demo.mp4 into
+     this file in the GitHub web editor and put the resulting user-attachment URL in its own
+     paragraph here — GitHub renders that URL as a real player. -->
+
 ## Install
 
 ```bash
