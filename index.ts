@@ -174,6 +174,17 @@ function sessionNameLabel(ctx: PetContext): string | null {
 	}
 }
 
+/** Provider display name for the strip (`OpenCode Go`), raw id as the fallback. */
+function providerLabel(ctx: PetContext): string {
+	const provider = ctx.model?.provider;
+	if (!provider) return "unknown";
+	try {
+		return ctx.modelRegistry?.getProviderDisplayName(provider) ?? provider;
+	} catch {
+		return provider;
+	}
+}
+
 /**
  * The slice of `ExtensionContext` the pet panel reads. Every stats source is
  * optional, so a stub runtime that only exposes `ui`/`model` still mounts the
@@ -182,6 +193,7 @@ function sessionNameLabel(ctx: PetContext): string | null {
 type PetContext = {
 	ui: ExtensionUIContext;
 	model: ExtensionContext["model"];
+	modelRegistry?: ExtensionContext["modelRegistry"];
 	thinkingLevel?: ExtensionContext["thinkingLevel"];
 	getContextUsage?: ExtensionContext["getContextUsage"];
 	sessionManager?: ExtensionContext["sessionManager"];
@@ -295,11 +307,11 @@ function petStats(ctx: PetContext, acc: UsageAccumulator): PetStats {
 		outputTokens: totals.outputTokens,
 		cacheRead: totals.cacheReadTokens,
 		cacheWrite: totals.cacheWriteTokens,
-		cacheHitRate: promptTokens > 0 ? (totals.latestCacheRead / promptTokens) * 100 : 0,
+		cacheHitRate: promptTokens > 0 ? (totals.latestCacheRead / promptTokens) * 100 : null,
 		cost: totals.cost,
 		cwd: ctx.cwd ?? process.cwd(),
 		sessionName: sessionNameLabel(ctx),
-		provider: model?.provider ?? "unknown",
+		provider: providerLabel(ctx),
 	};
 }
 
@@ -439,6 +451,7 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 		if (ctx.mode === "tui") {
 			ctx.ui.setWidget(PET_WIDGET_KEY, undefined);
 			ctx.ui.setFooter(undefined);
+			petFooterData = undefined;
 		}
 	});
 

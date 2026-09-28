@@ -47,6 +47,7 @@ import {
 	getPngDimensions,
 	Image,
 	truncateToWidth,
+	visibleWidth,
 	type Component,
 	type TUI,
 } from "@earendil-works/pi-tui";
@@ -112,13 +113,13 @@ export interface PetStats {
 	readonly cacheRead: number;
 	/** Cumulative cache-write tokens, shown as `W…` like Pi's footer. */
 	readonly cacheWrite: number;
-	/** Cache hit rate of the latest prompt, 0-100. */
-	readonly cacheHitRate: number;
+	/** Cache hit rate of the latest prompt, 0-100, or null when unmeasured. */
+	readonly cacheHitRate: number | null;
 	readonly cost: number;
 	readonly cwd: string;
 	/** Custom session name, shown after the cwd like Pi's footer. */
 	readonly sessionName: string | null;
-	/** Model provider id, prefixed when more than one provider is available. */
+	/** Provider display name (e.g. "OpenCode Go"), prefixed when >1 is available. */
 	readonly provider: string;
 }
 
@@ -342,7 +343,7 @@ export function buildProgressBar(stats: PetStats): string {
 	const totalSubs = segments * subsPerSegment;
 	const percent = stats.contextPercent ?? 0;
 	const filledSubs = percent === 0 ? 0 : Math.max(Math.ceil((percent / 100) * totalSubs), subsPerSegment);
-	const cacheSubs = Math.floor(filledSubs * (stats.cacheHitRate / 100));
+	const cacheSubs = Math.floor(filledSubs * ((stats.cacheHitRate ?? 0) / 100));
 	const bar = Array.from({ length: segments }, (_, i) => {
 		const start = i * subsPerSegment;
 		const end = start + subsPerSegment;
@@ -364,9 +365,9 @@ function shortenHome(cwd: string): string {
 }
 
 /**
- * Sanitize a `ui.setStatus` entry for a single line: newlines, tabs, carriage
- * returns and control characters are folded to spaces, then runs collapse.
- * Copied from Pi's footer so the same status text reads identically here.
+ * Sanitize a `ui.setStatus` entry for a single line. Pi's footer folds newlines,
+ * tabs and carriage returns; this also folds the remaining C0/DEL control
+ * characters so a stray escape cannot bleed into the strip, then collapses runs.
  */
 export function sanitizeStatusText(text: string): string {
 	// eslint-disable-next-line no-control-regex
@@ -574,34 +575,43 @@ export class WhalePetWidget implements Component {
 	private infoLines(width: number, hasAvatar: boolean): string[] {
 		const { model, thinkingLevel, stats } = this.view;
 		const thinking = this.theme.getThinkingBorderColor(thinkingLevel);
+		const budget = Math.max(1, width - (hasAvatar ? textColumn() : 0));
 		// Pi's footer disambiguates the provider only when more than one is
-		// available, so a single-provider setup stays uncluttered.
+		// available, and drops the prefix again when the line would not fit, so a
+		// single-provider setup (or a narrow strip) stays uncluttered.
 		const providerCount = this.footerData?.getAvailableProviderCount() ?? 0;
-		let modelLine = providerCount > 1 && stats?.provider ? `(${stats.provider}) ${model}` : model;
+		let modelLine = model;
 		if (stats?.reasoning) modelLine += ` • ${thinkingLevel}`;
 		if (stats) modelLine += ` • ${formatTokens(stats.contextWindow)}`;
+		if (providerCount > 1 && stats?.provider) {
+			const withProvider = `(${stats.provider}) ${modelLine}`;
+			if (visibleWidth(withProvider) <= budget) modelLine = withProvider;
+		}
 		const lines = [this.theme.bold(thinking(modelLine))];
 		if (stats) {
-			const barColor = resolveProgressColor(stats.contextPercent ?? 0, stats.cacheHitRate);
+			const barColor = resolveProgressColor(stats.contextPercent ?? 0, stats.cacheHitRate ?? 0);
 			lines.push(this.theme.fg(barColor, buildProgressBar(stats)));
 			lines.push(this.theme.fg("dim", this.usageLine(stats)));
 			lines.push(this.theme.fg("warning", this.locationLine(stats)));
 		}
-		const budget = Math.max(1, width - (hasAvatar ? textColumn() : 0));
 		return lines.map((line) => truncateToWidth(line, budget));
 	}
 
 	/**
-	 * Usage line, mirroring Pi's footer: `↑in ↓out R… W… CH… $cost`. The cache
-	 * parts are omitted until there is cache data, exactly as the footer does,
-	 * so a cold session is not padded with `R0 W0`.
+	 * Usage line, mirroring Pi's footer: `↑in ↓out R… W… CH…% $cost`. The cache
+	 * parts (including the hit rate) are omitted until there is cache data, and
+	 * the cost until something was billed, exactly as the footer does, so a cold
+	 * session is not padded with `R0 W0 CH0.0% $0.000`.
 	 */
 	private usageLine(stats: PetStats): string {
 		let line = `↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`;
 		if (stats.cacheRead > 0) line += ` R${formatTokens(stats.cacheRead)}`;
 		if (stats.cacheWrite > 0) line += ` W${formatTokens(stats.cacheWrite)}`;
-		if (stats.cacheRead > 0 || stats.cacheWrite > 0) line += ` ⇞${stats.cacheHitRate.toFixed(1)}%`;
-		return `${line} $${stats.cost.toFixed(3)}`;
+		if (stats.cacheHitRate !== null && (stats.cacheRead > 0 || stats.cacheWrite > 0)) {
+			line += ` CH${stats.cacheHitRate.toFixed(1)}%`;
+		}
+		if (stats.cost > 0) line += ` $${stats.cost.toFixed(3)}`;
+		return line;
 	}
 
 	/**

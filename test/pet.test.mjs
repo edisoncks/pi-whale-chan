@@ -438,7 +438,7 @@ test("widget composes the avatar and status side by side with cursor-forward", (
 	assert.match(text, /deepseek-v4\.1-flash/, "the model name is on the strip");
 	assert.match(text, /deepseek-v4\.1-flash • off • 1\.0M/, "model, level, and window share line 1");
 	assert.match(text, /⏵▕/, "the context progress bar is drawn");
-	assert.match(text, /⇞99\.8%/, "the cache hit rate is shown");
+	assert.match(text, /CH99\.8%/, "the cache hit rate is shown");
 });
 
 test("a state change restarts the cycle at frame 0 of the new state", () => {
@@ -455,7 +455,7 @@ test("a state change restarts the cycle at frame 0 of the new state", () => {
 	assert.ok(working0.length > 0, "the working-0 asset loads");
 	assert.ok(lines[1]?.includes(working0), "renders working-0, not a leftover idle frame");
 	assert.ok(!lines[1]?.includes(idleAwake), "the previous state's frame is gone");
-	assert.match(lines.join("\n"), /⇞/, "the stats panel survives a state change");
+	assert.match(lines.join("\n"), /CH/, "the stats panel survives a state change");
 });
 
 test("a state update that changes nothing does not restart the cycle", () => {
@@ -532,7 +532,7 @@ test("the info panel renders the four stat lines", () => {
 	widget.dispose();
 	assert.match(text, /deepseek-v4\.1-flash • off • 1\.0M/, "model, level, and window");
 	assert.match(text, /⏵▕/, "a progress bar");
-	assert.match(text, /↑10K ↓4\.6K R14K W200 ⇞99\.8% \$0\.003/, "token, cache, and cost totals");
+	assert.match(text, /↑10K ↓4\.6K R14K W200 CH99\.8% \$0\.003/, "token, cache, and cost totals");
 	assert.match(text, /~\/repos\/pi-emote/, "the cwd, home-abbreviated");
 });
 
@@ -566,6 +566,20 @@ test("footer data contributes the git branch, provider, and statuses", () => {
 		/~\/repos\/pi-emote \(feat\/pet-footer\) • session-name • α β/,
 		"branch, session name, and sorted statuses share the location line",
 	);
+});
+
+test("the cache-hit rate and cost are omitted until there is data", () => {
+	setCapabilities({ images: "iterm2", trueColor: true, hyperlinks: false });
+	const widget = makeWidget({
+		state: "idle",
+		model: "m",
+		stats: { ...DEFAULT_STATS, cacheRead: 0, cacheWrite: 0, cacheHitRate: null, cost: 0 },
+	});
+	const text = widget.render(120).join("\n");
+	widget.dispose();
+	assert.doesNotMatch(text, /CH/, "no cache-hit rate without a measured prompt");
+	assert.doesNotMatch(text, /\$/, "no cost when nothing was billed");
+	assert.match(text, /↑10K ↓4\.6K/, "the token totals still render");
 });
 
 test("a branch change asks the TUI to re-render, and dispose stops it", () => {
@@ -642,7 +656,10 @@ function makeExtensionHarness(footerData = makeFooterData()) {
 	whaleChan(pi);
 	const ctx = {
 		mode: "tui",
-		model: { id: "m", name: "M" },
+		model: { id: "m", name: "M", provider: "opencode-go" },
+		modelRegistry: {
+			getProviderDisplayName: (provider) => (provider === "opencode-go" ? "OpenCode Go" : provider),
+		},
 		thinkingLevel: "off",
 		ui: {
 			notify() {},
@@ -774,6 +791,17 @@ test("the strip above the editor carries the footer's git branch", async () => {
 
 	const widget = mount({ widgets, footers, footerData });
 	assert.match(widget.render(120).join("\n"), / \(feat\/pet-footer\)/, "footerData reaches the widget");
+	widget.dispose();
+});
+
+test("the strip shows the provider display name, not its id", async () => {
+	kitty();
+	const footerData = makeFooterData({ getAvailableProviderCount: () => 2 });
+	const { handlers, widgets, footers, ctx } = makeExtensionHarness(footerData);
+	await handlers.get("session_start")({ type: "session_start" }, ctx);
+
+	const widget = mount({ widgets, footers, footerData });
+	assert.match(widget.render(120).join("\n"), /\(OpenCode Go\) M/, "the provider id is rendered as its display name");
 	widget.dispose();
 });
 

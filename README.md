@@ -46,7 +46,7 @@ running, and vice versa.
 - The way Pi talks: playful, teasing, a little dramatic — and it keeps that voice through long, tool-heavy turns instead of fading into flat assistant prose.
 - Above the editor, a **whale-chan status strip** that replaces Pi's built-in
   footer: whale-chan animates beside a four-line status panel that mirrors the
-  footer — model • thinking level • context window, a context progress bar,
+  footer — the provider name, model • thinking level • context window, a context progress bar,
   cumulative `↑`/`↓` tokens with `R`/`W` cache totals and cache-hit rate, cost,
   then the working directory with its git branch, session name, and any
   `ui.setStatus` entries. The built-in footer is hidden while the strip is on,

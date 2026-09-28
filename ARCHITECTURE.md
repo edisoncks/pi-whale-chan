@@ -215,8 +215,8 @@ cursor-forward. Everything left of the text comes from one function,
 `textColumn()`, so the rendered indent and the truncation budget cannot drift
 apart.
 **Why the status panel looks the way it does, and what it cannot carry.** The
-four lines beside the avatar mirror Pi's own footer: `(provider) model • level •
-window`; a context progress bar; `↑in ↓out R… W… CH…% $cost`; and
+four lines beside the avatar mirror Pi's own footer: `(provider name) model •
+level • window`; a context progress bar; `↑in ↓out R… W… CH…% $cost`; and
 `cwd (branch) • sessionName` plus any `ui.setStatus` entries. The first three
 are the info panel of
 [pi-emote](https://github.com/cgxeiji/pi-emote) grown to footer parity. `index.ts`
