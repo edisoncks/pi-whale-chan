@@ -19,18 +19,15 @@ whatever language you write in — stage directions and all.
 
 ## Demo
 
-https://github.com/user-attachments/assets/72e1d11a-7b14-4af7-b6e7-a6ee94329b0d
+[▶ Watch the 28-second demo](https://github.com/user-attachments/assets/72e1d11a-7b14-4af7-b6e7-a6ee94329b0d)
 
-<p align="center">
-  <img src="assets/whale-chan-demo.gif" alt="Whale-chan's pet strip animating above Pi's editor while a turn runs" width="640">
-  <br>
-  <sub>Ten-second loop, for viewers that cannot play the attachment above · <a href="assets/whale-chan-demo.mp4">full 28-second MP4, 234 KB</a></sub>
-</p>
+<sub>928×672 screen capture · committed copy: <a href="assets/whale-chan-demo.mp4">MP4</a> (234 KB)</sub>
 
-<!-- The bare URL above is a GitHub user attachment — the only form github.com renders as a player.
-     A committed MP4 cannot play inline: raw.githubusercontent.com serves it as
-     application/octet-stream, and <video> tags pointing at repo-relative paths are stripped by the
-     sanitiser. The animated GIF therefore stays as the demo for npm and IDE previews. -->
+<!-- The link above points at a GitHub user attachment. On github.com it renders as a player (the link
+     text is replaced); elsewhere it degrades to a normal link, which is why a link is used instead
+     of the bare URL. A committed MP4 cannot play inline — raw.githubusercontent.com serves it as
+     application/octet-stream, and <video> tags pointing at repo-relative paths are stripped — so the
+     video lives in the attachment and the committed MP4 is the durable copy. -->
 
 ## Install
 
