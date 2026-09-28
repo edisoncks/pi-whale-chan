@@ -169,12 +169,12 @@ capture is in place before the widget factory runs. Three pi-tui properties
 decide the rendering strategy, and each one is a trap that a naive
 `HStack(Image, Text)` walks straight into:
 
-- **The image reports zero visible width.** `Image.render()` returns the Kitty
-escape sequence on one line and blank lines for the rest; a stripped escape
-sequence measures zero cells. `HStack` therefore believes the avatar is zero
-columns wide and would draw the panel text *on top of* the artwork. The strip
-computes the avatar's cell box itself (`fitCells`, mirroring pi-tui's unexported
-`calculateImageCellSize`) and reserves the column by hand.
+- **The image reports zero visible width.** A Kitty escape sequence measures
+zero cells once stripped, so `HStack` believes the avatar is zero columns wide
+and would draw the panel text *on top of* the artwork. The strip emits its own
+one-line-per-row escapes (`buildBandEscapes`) and computes the avatar's cell box
+itself (`fitCells`, mirroring pi-tui's unexported `calculateImageCellSize`), then
+reserves the column by hand.
 - **Reserving the column with spaces would repaint the artwork.** Printing N
 spaces to advance the cursor also paints N cells, and the image's anchor row sits
 exactly there. The strip uses CSI cursor-forward (`ESC[nC`) instead, which moves

@@ -15,13 +15,11 @@
  *
  * ## Why the avatar is one single-row image per strip line
  *
- * `Image.render()` returns the Kitty/iTerm2 escape sequence on one line and
- * blank lines for the remaining rows. A stripped escape sequence has a *visible
- * width of zero*, so `HStack` believes the avatar is zero cells wide and would
- * place the status text on top of the artwork. The text column is therefore
- * reserved by hand with a CSI cursor-forward (`ESC[nC`) rather than spaces,
- * because cursor-forward moves the cursor without painting and can never
- * overwrite an image cell.
+ * A Kitty escape sequence measures *zero cells* with `visibleWidth`, so
+ * `HStack` would believe the avatar is zero cells wide and place the status text
+ * on top of the artwork. The text column is therefore reserved by hand with a
+ * CSI cursor-forward (`ESC[nC`) rather than spaces, because cursor-forward moves
+ * the cursor without painting and can never overwrite an image cell.
  *
  * The avatar used to be a single four-row Kitty image anchored on the first
  * strip line, with the panel drawn *inside* that line via relative cursor
