@@ -46,11 +46,12 @@ running, and vice versa.
 - The way Pi talks: playful, teasing, a little dramatic — and it keeps that voice through long, tool-heavy turns instead of fading into flat assistant prose.
 - Above the editor, a **whale-chan status strip** that replaces Pi's built-in
   footer: whale-chan animates beside a four-line status panel that groups the
-  session into identity (`🐳` model, with the provider and thinking level
-  pinned right), a context gauge whose waterline ripples
-  while a turn runs, a usage meter (`↑`/`↓` tokens, `R`/`W` cache, `⚡` hit rate,
-  `🍚` cost), and a location row led by the git branch, then the working
-  directory, session name, and any `ui.setStatus` entries. The built-in footer is hidden while the strip is on,
+  session into identity (`🐳` model · `🔌` provider · `🧠` thinking level), a
+  fixed-width context gauge whose waterline ripples while a turn runs, a usage
+  meter (`↑`/`↓` tokens, `R`/`W` cache, `⚡` hit rate, `🍚` cost), and a
+  location row (`⑂` branch · `📂` cwd · session name · `ui.setStatus` entries).
+  Everything is inline and left-aligned, so a wide terminal never flings a
+  value to the far edge. The built-in footer is hidden while the strip is on,
   so the status lives in one place instead of two. She hugs her pillow and dozes
   off while idle, and types on a laptop while a turn is running. The strip is
   framed in the input box's own border colour — which follows the thinking

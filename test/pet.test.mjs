@@ -437,7 +437,7 @@ test("widget composes the avatar and status side by side with cursor-forward", (
 	assert.ok(graphics.includes(DIVIDER_CHAR), "a vertical divider separates the avatar from the status");
 	const text = lines.join("\n");
 	assert.match(text, /🐳 deepseek-v4\.1-flash/, "the model name leads the identity row");
-	assert.match(text, /deepseek · off/, "the provider and level are pinned right");
+	assert.match(text, /🔌 deepseek · 🧠 off/, "provider and level share the identity row");
 	assert.match(text, /1\.4%/, "the context percentage is on the gauge row");
 	assert.match(text, /⚡99\.8%/, "the cache hit rate is shown");
 });
@@ -538,7 +538,7 @@ test("the tide panel groups identity, gauge, meter, and location", () => {
 	const text = widget.render(120).join("\n");
 	widget.dispose();
 	assert.match(text, /🐳 DeepSeek V4\.1 Flash/, "the whale leads the identity row");
-	assert.match(text, /OpenCode Go · high/, "the provider display name and level are pinned right");
+	assert.match(text, /🔌 OpenCode Go · 🧠 high/, "provider and level share the identity row");
 	assert.match(text, /1\.4%/, "the context percentage is on the gauge row");
 	assert.match(text, /⚡99\.8%/, "the cache hit rate uses the bolt");
 	assert.match(text, /🍚 0\.003/, "the cost is the rice counter");

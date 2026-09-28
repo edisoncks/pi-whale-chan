@@ -340,6 +340,9 @@ export const TIDE_FOAM_FRAMES = ["", "≈", "~", "≈", ""] as const;
 /** Slow cadence for the text-only waterline pulse (the avatar keeps its own). */
 const TIDE_PULSE_MS = 300;
 
+/** Preferred gauge width; it shrinks only when the terminal is too narrow. */
+const TIDE_BAR_CELLS = 20;
+
 /**
  * Context bar for the status panel: fresh input as `█`, cached prompt as `░`,
  * a horizontal eighth-block leading edge, and a one-cell foam glyph riding the
@@ -371,17 +374,6 @@ export function buildTideBar(stats: PetStats, cells: number, foam = ""): string 
 	return out.join("");
 }
 
-/**
- * Compose `left` and `right` on one line with `right` pinned to `budget`
- * columns. When the pair cannot fit with a gap, the right side is dropped so
- * the leading content survives; the caller truncates whatever remains.
- */
-function splitLine(left: string, right: string, budget: number, gap = 2): string {
-	if (right.length === 0) return left;
-	const space = budget - visibleWidth(left) - visibleWidth(right);
-	if (space < gap) return left;
-	return left + " ".repeat(space) + right;
-}
 
 /** Replace a leading home directory with `~`, like Pi's own footer. */
 function shortenHome(cwd: string): string {
@@ -591,67 +583,67 @@ export class WhalePetWidget implements Component {
 	}
 
 	/**
-	 * The four-line status panel beside the avatar: identity with the
-	 * provider/level pinned right, a context gauge whose waterline ripples while
-	 * a turn runs, a usage meter with the cost pinned right, and a location line
-	 * led by the git branch. Four rows, so it stays level with the four-row
-	 * avatar. Without a `stats` snapshot only the identity line is drawn, so a
-	 * host that has not wired the data yet degrades to a readable strip instead
-	 * of a half-empty one.
+	 * The four-line status panel beside the avatar. Everything is inline and
+	 * left-aligned so a wide terminal leaves no dead space between a label and
+	 * its value: identity (`🐳 model · 🔌 provider · 🧠 level`), a fixed-width
+	 * context gauge with its reading beside it, a usage meter, and a location
+	 * row led by the git branch. Without a `stats` snapshot only the identity
+	 * line is drawn, so a host that has not wired the data yet degrades to a
+	 * readable strip instead of a half-empty one.
 	 */
 	private infoLines(width: number, hasAvatar: boolean): string[] {
 		const budget = Math.max(1, width - (hasAvatar ? textColumn() : 0));
 		const { model, thinkingLevel, stats } = this.view;
 		const thinking = this.theme.getThinkingBorderColor(thinkingLevel);
-		// Row 1: identity. Provider owns the corner (always worth showing there);
-		// the level only when the model reasons, matching Pi's footer.
-		let meta = stats?.provider ?? "";
-		if (stats?.reasoning) meta += (meta ? " · " : "") + thinkingLevel;
-		let identity = this.theme.bold(thinking(`🐳 ${model}`));
-		if (meta) identity = splitLine(identity, this.theme.fg("dim", meta), budget);
-		const lines = [identity];
+		// Row 1: identity. Provider and level only add their icon when present.
+		const identity = [`🐳 ${model}`];
+		if (stats?.provider) identity.push(`🔌 ${stats.provider}`);
+		if (stats?.reasoning) identity.push(`🧠 ${thinkingLevel}`);
+		const lines = [this.theme.bold(thinking(identity.join(" · ")))];
 		if (stats) {
-			// Row 2: context gauge. Percent and window are pinned right so the
-			// waterline can breathe without the numbers drifting.
+			// Row 2: the gauge keeps a fixed width so its reading stays beside it
+			// instead of drifting to the far edge on a wide screen.
 			const percent = stats.contextPercent ?? 0;
 			const color = resolveProgressColor(percent, stats.cacheHitRate ?? 0);
 			const tokens = stats.contextTokens !== null ? formatTokens(stats.contextTokens) : "?";
 			const percentText = stats.contextPercent !== null ? `${percent.toFixed(1)}%` : "?";
-			const rightMeta = `${percentText}  ${tokens}/${formatTokens(stats.contextWindow)}`;
-			const barCells = Math.max(1, budget - visibleWidth(rightMeta) - 2);
+			const reading = `${percentText} · ${tokens}/${formatTokens(stats.contextWindow)}`;
+			const barCells = Math.max(6, Math.min(TIDE_BAR_CELLS, budget - visibleWidth(reading) - 5));
 			const foam =
 				this.view.state === "working"
 					? (TIDE_FOAM_FRAMES[this.index % TIDE_FOAM_FRAMES.length] as string)
 					: "";
-			const bar = this.theme.fg(color, buildTideBar(stats, barCells, foam));
-			lines.push(splitLine(bar, this.theme.fg("dim", rightMeta), budget));
-			// Row 3: usage meter, cost pinned right.
-			const cost = stats.cost > 0 ? `🍚 ${stats.cost.toFixed(3)}` : "";
-			lines.push(splitLine(this.theme.fg("dim", this.usageMeter(stats)), this.theme.fg("dim", cost), budget));
+			const gauge = this.theme.fg(color, `[${buildTideBar(stats, barCells, foam)}]`);
+			lines.push(`${gauge} · ${this.theme.fg("dim", reading)}`);
+			// Row 3: usage meter, all inline.
+			lines.push(this.theme.fg("dim", this.usageMeter(stats)));
 			// Row 4: location, branch first because it is the field that changes.
 			lines.push(this.tideLocation(stats));
 		}
 		return lines.map((line) => truncateToWidth(line, budget));
 	}
 
-	/** `↑in ↓out · R… W… · ⚡hit%` for the tide meter row. */
+	/** `↑in ↓out · R… W… · ⚡hit% · 🍚 cost` for the usage row. */
 	private usageMeter(stats: PetStats): string {
-		let meter = `↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`;
+		const parts = [`↑${formatTokens(stats.inputTokens)} ↓${formatTokens(stats.outputTokens)}`];
 		if (stats.cacheRead > 0 || stats.cacheWrite > 0) {
-			meter += ` · R${formatTokens(stats.cacheRead)} W${formatTokens(stats.cacheWrite)}`;
+			parts.push(`R${formatTokens(stats.cacheRead)} W${formatTokens(stats.cacheWrite)}`);
 		}
 		if (stats.cacheHitRate !== null && (stats.cacheRead > 0 || stats.cacheWrite > 0)) {
-			meter += ` · ⚡${stats.cacheHitRate.toFixed(1)}%`;
+			parts.push(`⚡${stats.cacheHitRate.toFixed(1)}%`);
 		}
-		return meter;
+		if (stats.cost > 0) parts.push(`🍚 ${stats.cost.toFixed(3)}`);
+		return parts.join(" · ");
 	}
 
-	/** `⑂ branch · cwd · session · statuses` for the location row. */
+	/** `⑂ branch · 📂 cwd · session · statuses` for the location row. */
 	private tideLocation(stats: PetStats): string {
 		const parts: string[] = [];
 		const branch = this.footerData?.getGitBranch();
+		// `🪾` is Unicode 16.0 (2024) and missing from most terminal fonts, so the
+		// long-standing `⑂` keeps the row legible everywhere.
 		if (branch) parts.push(this.theme.fg("accent", `⑂ ${branch}`));
-		parts.push(this.theme.fg("dim", shortenHome(stats.cwd)));
+		parts.push(this.theme.fg("dim", `📂 ${shortenHome(stats.cwd)}`));
 		if (stats.sessionName) parts.push(this.theme.fg("muted", stats.sessionName));
 		const statuses = this.footerData ? formatStatuses(this.footerData.getExtensionStatuses()) : "";
 		if (statuses.length > 0) parts.push(this.theme.fg("warning", statuses));
