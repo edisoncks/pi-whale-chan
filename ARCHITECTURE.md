@@ -221,10 +221,17 @@ four lines beside the avatar group the session into identity / gauge / meter /
 location. Everything is inline and left-aligned, so a wide terminal never
 flings a value to the far edge: identity (`🐳 model · 🔌 provider · 🧠 level`);
 a fixed-width context gauge whose eighth-block waterline ripples with a foam
-glyph while a turn runs; a usage meter (`↑in ↓out · R… W… · ⚡hit% · 🍚 cost`);
+glyph while a turn runs, wearing eighth-block end walls (`▏`/`▕`) only where the
+fill leaves an edge bare (both when empty, the right one when partial, none when
+full); a usage meter (`↑in ↓out · R… W… · ⚡hit% · 🍚 cost`);
 and a location row (`🪾 branch · 📂 cwd · session · statuses`). The panel grew
 out of [pi-emote](https://github.com/cgxeiji/pi-emote)'s info panel, redesigned
 to carry the footer's data rather than mirror it field-for-field.
+
+The gauge is coloured by Pi's **own footer thresholds** — green up to 70%, yellow
+above it, red above 90% — so the strip and the footer it replaces cannot
+disagree; a cold cache that actually has data is red too, and an empty gauge
+stays green rather than falling back to the terminal's default white.
 
 `index.ts` builds one snapshot (`petStats`) from `ctx` and refreshes it on
 `agent_start`, every `message_end`, `agent_settled`, `session_info_changed`, and
