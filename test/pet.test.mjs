@@ -67,7 +67,8 @@ const {
 	stateColumns,
 	textColumn,
 } = await import("../pet.ts");
-const { TuiMainScreen, resetCapabilitiesCache, setCapabilities } = await import("@earendil-works/pi-tui");
+const { TuiMainScreen, resetCapabilitiesCache, setCapabilities, setCellDimensions } =
+	await import("@earendil-works/pi-tui");
 
 /**
  * Alpha bounding box of an 8-bit RGBA, non-interlaced PNG.
@@ -546,6 +547,29 @@ test("the tide panel groups identity, gauge, meter, and location", () => {
 	assert.match(text, /α/, "extension statuses still ride the location row");
 });
 
+test("a short avatar block pushes the rest of the panel below it", () => {
+	kitty();
+	// Tall, narrow cells scale a square frame to two rows instead of four. The
+	// image block can only ever reserve its own rows, so the panel's lower rows
+	// must fall back to ordinary text below the block instead of vanishing — the
+	// regression that made only the strip's head show over SSH.
+	setCellDimensions({ widthPx: 8, heightPx: 40 });
+	const widget = new WhalePetWidget(TUI, THEME, {
+		state: "working",
+		thinkingLevel: "high",
+		model: "DeepSeek V4.1 Flash",
+		stats: { ...DEFAULT_STATS, provider: "OpenCode Go" },
+	});
+	const lines = widget.render(90);
+	widget.dispose();
+	setCellDimensions({ widthPx: 9, heightPx: 18 });
+	assert.equal(lines.length, 5, "the rule plus one line per panel row, whatever the block height");
+	const text = lines.join("\n");
+	assert.match(text, /1\.4%/, "the gauge survives a short block");
+	assert.match(text, /⚡99\.8%/, "the usage meter survives a short block");
+	assert.match(text, /📂/, "the location row survives a short block");
+});
+
 test("buildTideBar fills, shades cache, and rides the foam", () => {
 	const stats = { ...DEFAULT_STATS, contextPercent: 50, cacheHitRate: 40 };
 	const calm = buildTideBar(stats, 20, "");
@@ -849,5 +873,6 @@ after(() => {
 	// setCapabilities() writes pi-tui's shared capability cache; drop it so a
 	// later consumer in this process re-detects instead of inheriting the stub.
 	resetCapabilitiesCache();
+	setCellDimensions({ widthPx: 9, heightPx: 18 });
 	rmSync(sandbox, { recursive: true, force: true });
 });

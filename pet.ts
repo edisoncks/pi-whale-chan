@@ -512,9 +512,9 @@ export class WhalePetWidget implements Component {
 		// treated as ordinary text, cleared with `ESC[2K`, and the "stuck head" bug
 		// would return.
 		const block = avatar.length;
-		// Center the four-line status block against the avatar so the strip does not
-		// look top-heavy. A panel taller than the frame is clamped to the block for
-		// the same reason: overflow rows are outside the reserved image.
+		// Center the status block against the avatar so the strip does not look
+		// top-heavy. A panel taller than the frame is clamped to the block for the
+		// same reason: rows the image block cannot reach are drawn below it.
 		const top = Math.max(0, Math.floor((block - text.length) / 2));
 		const right = (row: number): string => {
 			const index = row - top;
@@ -537,6 +537,17 @@ export class WhalePetWidget implements Component {
 		anchor += `\x1b[${block - 1}A`;
 		lines.push(anchor);
 		for (let row = 1; row < block; row++) lines.push("");
+		// A terminal can size the avatar to fewer rows than the panel needs (tall
+		// or narrow cells, common over SSH and serial links), and the image block
+		// can only ever reserve its own rows. Any panel row the block did not reach
+		// is emitted as an ordinary text line below it; without this the lower rows
+		// were silently dropped and the strip showed only its head. The count stays
+		// fixed at `max(block, text.length)` rows either way, so the strip never
+		// changes height when the frame size shifts.
+		const indent = " ".repeat(textColumn());
+		for (let index = block - top; index < text.length; index++) {
+			lines.push(truncateToWidth(indent + (text[index] as string), width));
+		}
 		return lines;
 	}
 
