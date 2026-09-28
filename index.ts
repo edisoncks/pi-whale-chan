@@ -294,7 +294,15 @@ export function accumulateUsage(acc: UsageAccumulator, manager: SessionManager |
  * the model line instead of throwing mid-render.
  */
 function petStats(ctx: PetContext, acc: UsageAccumulator): PetStats {
-	const usage = ctx.getContextUsage?.();
+	// Best-effort, like the accumulation below: a host whose `getContextUsage`
+	// throws (or a stub that lacks it) degrades to the model line instead of
+	// taking down the lifecycle handler that called us.
+	let usage: ReturnType<NonNullable<PetContext["getContextUsage"]>> | undefined;
+	try {
+		usage = ctx.getContextUsage?.();
+	} catch {
+		usage = undefined;
+	}
 	const model = ctx.model;
 	const totals = accumulateUsage(acc, ctx.sessionManager);
 	const promptTokens = totals.latestInput + totals.latestCacheRead + totals.latestCacheWrite;
@@ -532,15 +540,19 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 			// persona, so turning the persona off must not hide the pet.
 			if (arg === "pet" || arg === "pet on" || arg === "pet off" || arg === "pet toggle") {
 				petEnabled = arg === "pet on" ? true : arg === "pet off" ? false : !petEnabled;
-				const petPersistError = saveConfig({ enabled, pet: petEnabled });
-				if (petPersistError) {
-					ctx.ui.notify(`[whale-chan] could not persist setting: ${petPersistError}`, "warning");
-					return;
-				}
+				// Apply the switch before persisting. A failed write must still flip the
+				// live strip — the same in-session-but-not-remembered contract the persona
+				// branch has — otherwise the flag and the UI disagree and `/whale status`
+				// reports a state the strip is not showing.
 				if (petEnabled && ctx.mode === "tui") {
 					mountPet(ctx);
 				} else {
 					unmountPet(ctx);
+				}
+				const petPersistError = saveConfig({ enabled, pet: petEnabled });
+				if (petPersistError) {
+					ctx.ui.notify(`[whale-chan] could not persist setting: ${petPersistError}`, "warning");
+					return;
 				}
 				ctx.ui.notify(`whale-chan pet: ${petEnabled ? "on" : "off"}`, "info");
 				return;

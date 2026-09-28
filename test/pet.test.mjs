@@ -68,6 +68,7 @@ const {
 	loadFrame,
 	resolveProgressColor,
 	sanitizeStatusText,
+	shortenHome,
 	stateColumns,
 	textColumn,
 } = await import("../pet.ts");
@@ -769,6 +770,26 @@ test("statuses are sorted by key and stripped to one line", () => {
 	);
 });
 
+test("the location path shortens home without eating a sibling prefix", () => {
+	const previousHome = process.env.HOME;
+	const previousProfile = process.env.USERPROFILE;
+	process.env.HOME = "/home/ed";
+	delete process.env.USERPROFILE;
+	try {
+		assert.equal(shortenHome("/home/ed"), "~", "home itself collapses to ~");
+		assert.equal(shortenHome("/home/ed/repos/proj"), "~/repos/proj", "a real descendant shortens");
+		// Regression: a bare startsWith() read the sibling /home/ed2 as inside
+		// /home/ed and rendered it as the nonsense `~2/repos`.
+		assert.equal(shortenHome("/home/ed2/repos"), "/home/ed2/repos", "a prefix sibling is left alone");
+		assert.equal(shortenHome("/var/tmp"), "/var/tmp", "an unrelated path is left alone");
+	} finally {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		if (previousProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousProfile;
+	}
+});
+
 test("the cache-hit rate and cost are omitted until there is data", () => {
 	setCapabilities({ images: "iterm2", trueColor: true, hyperlinks: false });
 	const widget = makeWidget({
@@ -981,6 +1002,33 @@ test("a disabled pet preference never mounts the strip", async () => {
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 	assert.ok(!widgets.has("whale_pet"), "the persisted preference is honoured on the next session");
 	assert.ok(footers.current === undefined, "and the built-in footer stays");
+});
+
+test("the pet switch still applies when the preference cannot be persisted", async () => {
+	kitty();
+	// A path under a missing parent makes saveConfig fail with ENOENT. The live
+	// strip must still follow the command: returning before mount/unmount left the
+	// flag and the UI disagreeing, so `/whale status` lied about what was shown.
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = join(sandbox, "missing-parent", "nested");
+	try {
+		const h = makeExtensionHarness();
+		await h.handlers.get("session_start")({ type: "session_start" }, h.ctx);
+		assert.ok(h.widgets.has("whale_pet"), "the strip starts mounted");
+		const widget = mount(h);
+
+		await h.commands.get("whale").handler("pet off", h.ctx);
+		assert.ok(!h.widgets.has("whale_pet"), "off unmounts the strip even though the write failed");
+		assert.ok(h.footers.current === undefined, "and restores the built-in footer");
+
+		await h.commands.get("whale").handler("pet on", h.ctx);
+		assert.ok(h.widgets.has("whale_pet"), "on remounts the strip even though the write failed");
+		assert.ok(h.footers.current !== undefined, "and hides the built-in footer again");
+		widget.dispose();
+	} finally {
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+	}
 });
 
 test("the strip above the editor carries the footer's git branch", async () => {

@@ -357,9 +357,11 @@ flag drives `before_agent_start` from then on.
 `getAgentDir()` respects a custom agent dir and `PI_CODING_AGENT_DIR` (the
 `${APP_NAME}_CODING_AGENT_DIR` env var, `APP_NAME = "pi"`). Saves are
 atomic (tmp + rename) so a crash never leaves a half-written file. Reads fail
-open (missing = on) and heal corruption to `{"enabled": true}` with a warning.
-A failed persist warns instead of crashing, so the UI never lies about the
-state across restarts.
+open (missing = on) and heal corruption with a warning: each key is validated
+independently against its default (`{enabled: true, pet: true}`), so one bad
+value cannot discard a good sibling. A failed persist warns instead of
+crashing, and the in-memory switch is applied regardless, so the change takes
+effect for the rest of the session — it just is not remembered across restarts.
 
 ## Invariants
 
@@ -408,7 +410,7 @@ frozen, and keep the injection guarded (see Invariants).
 
 Add the word to the `options` array in `getArgumentCompletions`, then handle it
 in the `handler` before the unknown-argument branch. If it changes state,
-persist it with `saveEnabled`.
+persist it with `saveConfig` (and apply the live change even if the write fails).
 
 ### Rename the section
 

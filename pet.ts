@@ -46,7 +46,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	allocateImageId,
@@ -461,10 +461,24 @@ export function buildTideBar(stats: PetStats, cells: number, foam = ""): string 
 }
 
 
-/** Replace a leading home directory with `~`, like Pi's own footer. */
-function shortenHome(cwd: string): string {
+/**
+ * Replace a path inside the home directory with a `~`-relative form, mirroring
+ * Pi's own footer (`formatCwdForFooter`). A naive `startsWith(home)` prefix check
+ * misreads a sibling that merely shares a string prefix — `HOME=/home/ed` would
+ * render `/home/ed2/repos` as `~2/repos` — so both sides are resolved and
+ * `relative()` decides. Only home itself ("~") and a real descendant shorten; a
+ * `..`-escaping or absolute relative result is left untouched. Exported so the
+ * boundary case can be pinned by a unit test.
+ */
+export function shortenHome(cwd: string): string {
 	const home = process.env.HOME || process.env.USERPROFILE;
-	return home !== undefined && home.length > 0 && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
+	if (home === undefined || home.length === 0) return cwd;
+	const relativeToHome = relative(resolve(home), resolve(cwd));
+	const isInsideHome =
+		relativeToHome === "" ||
+		(relativeToHome !== ".." && !relativeToHome.startsWith(`..${sep}`) && !isAbsolute(relativeToHome));
+	if (!isInsideHome) return cwd;
+	return relativeToHome === "" ? "~" : `~${sep}${relativeToHome}`;
 }
 
 /**
