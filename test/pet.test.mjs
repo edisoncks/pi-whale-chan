@@ -542,7 +542,7 @@ test("the tide panel groups identity, gauge, meter, and location", () => {
 	assert.match(text, /1\.4%/, "the context percentage is on the gauge row");
 	assert.match(text, /⚡99\.8%/, "the cache hit rate uses the bolt");
 	assert.match(text, /🍚 0\.003/, "the cost is the rice counter");
-	assert.match(text, /⑂ feat\/pet-footer/, "the branch leads the location row");
+	assert.match(text, /🪾 feat\/pet-footer/, "the branch leads the location row");
 	assert.match(text, /α/, "extension statuses still ride the location row");
 });
 
@@ -787,7 +787,7 @@ test("the strip above the editor carries the footer's git branch", async () => {
 	await handlers.get("session_start")({ type: "session_start" }, ctx);
 
 	const widget = mount({ widgets, footers, footerData });
-	assert.match(widget.render(120).join("\n"), /⑂ feat\/pet-footer/, "footerData reaches the widget");
+	assert.match(widget.render(120).join("\n"), /🪾 feat\/pet-footer/, "footerData reaches the widget");
 	widget.dispose();
 });
 

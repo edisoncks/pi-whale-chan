@@ -489,6 +489,10 @@ export class WhalePetWidget implements Component {
 		const color = this.borderColor();
 		const divider = color(DIVIDER_CHAR);
 		const text = this.infoLines(width, hasAvatar);
+		// Self-heal the frame loop. If a tick was ever lost — a coalesced render, a
+		// throw between ticks, a bad index — restart it the moment Pi draws the
+		// strip, so the image can never stay frozen on its last drawn frame.
+		if (!this.closed && this.timer === undefined) this.arm();
 		// The separator comes first, so the strip reads as a panel that the
 		// editor's own top border closes at the bottom.
 		const lines: string[] = [this.rule(width, color)];
@@ -636,13 +640,11 @@ export class WhalePetWidget implements Component {
 		return parts.join(" · ");
 	}
 
-	/** `⑂ branch · 📂 cwd · session · statuses` for the location row. */
+	/** `🪾 branch · 📂 cwd · session · statuses` for the location row. */
 	private tideLocation(stats: PetStats): string {
 		const parts: string[] = [];
 		const branch = this.footerData?.getGitBranch();
-		// `🪾` is Unicode 16.0 (2024) and missing from most terminal fonts, so the
-		// long-standing `⑂` keeps the row legible everywhere.
-		if (branch) parts.push(this.theme.fg("accent", `⑂ ${branch}`));
+		if (branch) parts.push(this.theme.fg("accent", `🪾 ${branch}`));
 		parts.push(this.theme.fg("dim", `📂 ${shortenHome(stats.cwd)}`));
 		if (stats.sessionName) parts.push(this.theme.fg("muted", stats.sessionName));
 		const statuses = this.footerData ? formatStatuses(this.footerData.getExtensionStatuses()) : "";
@@ -660,7 +662,10 @@ export class WhalePetWidget implements Component {
 		this.timer = undefined;
 		if (this.closed) return;
 		const cycle = PET_CYCLES[this.view.state];
-		const frame = cycle[this.index % cycle.length];
+		// A missing frame reference must never be able to strand the loop: fall
+		// back to the first frame so a bad index degrades to a static pose, not a
+		// dead animation.
+		const frame = cycle[this.index % cycle.length] ?? cycle[0];
 		const advancing = this.withAvatar && frame !== undefined && cycle.length > 1;
 		// Text-only strips have no avatar to animate, but the tide waterline still
 		// ripples while a turn runs; that needs its own (slower) timer.
@@ -672,8 +677,12 @@ export class WhalePetWidget implements Component {
 			if (this.closed) return;
 			const current = PET_CYCLES[this.view.state];
 			this.index = advancing ? (this.index + 1) % current.length : this.index + 1;
-			this.tui.requestRender();
+			// Re-arm *before* requesting the render. `requestRender` is
+			// fire-and-forget: its frame can be coalesced away or throw, and when it
+			// ran before `arm()` a single failure killed the whole frame loop, leaving
+			// the image frozen on its last drawn frame.
 			this.arm();
+			this.tui.requestRender();
 		}, delay);
 		this.timer.unref?.();
 	}
