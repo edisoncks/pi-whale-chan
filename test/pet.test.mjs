@@ -56,7 +56,6 @@ const {
 	TIDE_FOAM_FRAMES,
 	WhalePetWidget,
 	avatarInset,
-	buildProgressBar,
 	buildTideBar,
 	fitCells,
 	formatStatuses,
@@ -437,10 +436,10 @@ test("widget composes the avatar and status side by side with cursor-forward", (
 	assert.match(graphics, /\x1b\[\d+C/, "the divider column is reached with cursor-forward, which never paints");
 	assert.ok(graphics.includes(DIVIDER_CHAR), "a vertical divider separates the avatar from the status");
 	const text = lines.join("\n");
-	assert.match(text, /deepseek-v4\.1-flash/, "the model name is on the strip");
-	assert.match(text, /deepseek-v4\.1-flash • off • 1\.0M/, "model, level, and window share line 1");
-	assert.match(text, /⏵▕/, "the context progress bar is drawn");
-	assert.match(text, /CH99\.8%/, "the cache hit rate is shown");
+	assert.match(text, /🐳 deepseek-v4\.1-flash/, "the model name leads the identity row");
+	assert.match(text, /deepseek · off/, "the provider and level are pinned right");
+	assert.match(text, /1\.4%/, "the context percentage is on the gauge row");
+	assert.match(text, /⚡99\.8%/, "the cache hit rate is shown");
 });
 
 test("a state change restarts the cycle at frame 0 of the new state", () => {
@@ -457,7 +456,7 @@ test("a state change restarts the cycle at frame 0 of the new state", () => {
 	assert.ok(working0.length > 0, "the working-0 asset loads");
 	assert.ok(lines[1]?.includes(working0), "renders working-0, not a leftover idle frame");
 	assert.ok(!lines[1]?.includes(idleAwake), "the previous state's frame is gone");
-	assert.match(lines.join("\n"), /CH/, "the stats panel survives a state change");
+	assert.match(lines.join("\n"), /⚡/, "the stats panel survives a state change");
 });
 
 test("a state update that changes nothing does not restart the cycle", () => {
@@ -478,8 +477,8 @@ test("non-Kitty terminals get a text-only strip instead of a scrambled image", (
 
 	assert.equal(lines.length, AVATAR_MAX_ROWS + 1, "separator plus the four info lines, no avatar rows");
 	assert.doesNotMatch(lines.join("\n"), /\x1b_G/, "no graphics escape is emitted");
-	assert.match(lines.join("\n"), /m • off • 1\.0M/, "the model line is the fallback");
-	assert.match(lines.join("\n"), /⏵▕/, "the text-only strip still shows the stats panel");
+	assert.match(lines.join("\n"), /🐳 m/, "the identity line is the fallback");
+	assert.match(lines.join("\n"), /1\.4%/, "the text-only strip still shows the stats panel");
 });
 
 test("a long model label is clipped to the strip width, not wrapped", () => {
@@ -512,30 +511,11 @@ test("formatTokens compacts large counts", () => {
 	assert.equal(formatTokens(1_000_000), "1.0M");
 });
 
-test("the context bar is empty at zero and filled past the minimum", () => {
-	const empty = buildProgressBar({ ...DEFAULT_STATS, contextPercent: 0, contextTokens: null });
-	assert.match(empty, /^⏵▕ {20}▏ \? \(0\.0%\)$/, "an empty context draws an empty bar");
-	const half = buildProgressBar({ ...DEFAULT_STATS, contextPercent: 50, cacheHitRate: 0 });
-	assert.match(half, /█/, "a half-full context shows blocks");
-	assert.match(half, /50\.0%/);
-});
-
 test("progress colour prioritises a cold cache, then a nearly-full context", () => {
 	assert.equal(resolveProgressColor(10, 20), "error", "a cold cache is the alarm");
 	assert.equal(resolveProgressColor(80, 90), "warning", "a nearly-full context outranks cache");
 	assert.equal(resolveProgressColor(10, 90), "success", "a healthy cache is good news");
 	assert.equal(resolveProgressColor(10, 0), "text", "a fresh session stays neutral");
-});
-
-test("the info panel renders the four stat lines", () => {
-	kitty();
-	const widget = makeWidget({ state: "idle", model: "deepseek-v4.1-flash" });
-	const text = widget.render(80).join("\n");
-	widget.dispose();
-	assert.match(text, /deepseek-v4\.1-flash • off • 1\.0M/, "model, level, and window");
-	assert.match(text, /⏵▕/, "a progress bar");
-	assert.match(text, /↑10K ↓4\.6K R14K W200 CH99\.8% \$0\.003/, "token, cache, and cost totals");
-	assert.match(text, /~\/repos\/pi-emote/, "the cwd, home-abbreviated");
 });
 
 test("the tide panel groups identity, gauge, meter, and location", () => {
@@ -552,7 +532,6 @@ test("the tide panel groups identity, gauge, meter, and location", () => {
 			thinkingLevel: "high",
 			model: "DeepSeek V4.1 Flash",
 			stats: { ...DEFAULT_STATS, provider: "OpenCode Go" },
-			style: "tide",
 		},
 		footerData,
 	);
@@ -587,29 +566,6 @@ test("statuses are sorted by key and stripped to one line", () => {
 	);
 });
 
-test("footer data contributes the git branch, provider, and statuses", () => {
-	kitty();
-	const footerData = makeFooterData({
-		getGitBranch: () => "feat/pet-footer",
-		getExtensionStatuses: () => new Map([["b", "β"], ["a", "α"]]),
-		getAvailableProviderCount: () => 2,
-	});
-	const widget = new WhalePetWidget(
-		TUI,
-		THEME,
-		{ state: "idle", thinkingLevel: "off", model: "m", stats: DEFAULT_STATS },
-		footerData,
-	);
-	const text = widget.render(120).join("\n");
-	widget.dispose();
-	assert.match(text, /\(deepseek\) m/, "the provider is prefixed when more than one is available");
-	assert.match(
-		text,
-		/~\/repos\/pi-emote \(feat\/pet-footer\) • session-name • α β/,
-		"branch, session name, and sorted statuses share the location line",
-	);
-});
-
 test("the cache-hit rate and cost are omitted until there is data", () => {
 	setCapabilities({ images: "iterm2", trueColor: true, hyperlinks: false });
 	const widget = makeWidget({
@@ -619,8 +575,8 @@ test("the cache-hit rate and cost are omitted until there is data", () => {
 	});
 	const text = widget.render(120).join("\n");
 	widget.dispose();
-	assert.doesNotMatch(text, /CH/, "no cache-hit rate without a measured prompt");
-	assert.doesNotMatch(text, /\$/, "no cost when nothing was billed");
+	assert.doesNotMatch(text, /⚡/, "no cache-hit rate without a measured prompt");
+	assert.doesNotMatch(text, /🍚/, "no cost when nothing was billed");
 	assert.match(text, /↑10K ↓4\.6K/, "the token totals still render");
 });
 
@@ -660,8 +616,8 @@ test("without stats only the model line is drawn", () => {
 	const lines = widget.render(80);
 	widget.dispose();
 	assert.equal(lines.length, AVATAR_MAX_ROWS + 1, "the avatar still reserves its rows");
-	assert.match(lines.join("\n"), /m/);
-	assert.doesNotMatch(lines.join("\n"), /⏵▕/, "no bar without stats");
+	assert.match(lines.join("\n"), /🐳 m/);
+	assert.doesNotMatch(lines.join("\n"), /🍚/, "no meter without stats");
 });
 
 // --- extension wiring -------------------------------------------------------
@@ -845,27 +801,6 @@ test("the strip shows the provider display name, not its id", async () => {
 	const text = widget.render(120).join("\n");
 	assert.match(text, /OpenCode Go/, "the provider display name is shown");
 	assert.doesNotMatch(text, /opencode-go/, "the raw provider id is not");
-	widget.dispose();
-});
-
-test("/whale pet style switches the layout and persists", async () => {
-	kitty();
-	const { handlers, commands, widgets, footers, footerData, ctx } = makeExtensionHarness();
-	await handlers.get("session_start")({ type: "session_start" }, ctx);
-	let widget = mount({ widgets, footers, footerData });
-	assert.match(widget.render(120).join("\n"), /🐳 M/, "the shipped default is the tide layout");
-	widget.dispose();
-
-	await commands.get("whale").handler("pet style parity", ctx);
-	assert.equal(JSON.parse(readFileSync(STATE_PATH, "utf8")).petStyle, "parity", "the choice is persisted");
-	widget = mount({ widgets, footers, footerData });
-	assert.match(widget.render(120).join("\n"), /⏵▕/, "parity renders the footer-faithful bar");
-	assert.doesNotMatch(widget.render(120).join("\n"), /🐳/, "the tide whale is gone");
-	widget.dispose();
-
-	await commands.get("whale").handler("pet style tide", ctx);
-	widget = mount({ widgets, footers, footerData });
-	assert.match(widget.render(120).join("\n"), /🐳 M/, "tide comes back");
 	widget.dispose();
 });
 
