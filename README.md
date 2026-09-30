@@ -21,7 +21,7 @@ rice-loving, brilliant-but-lazy AI in a blue-and-white maid dress.
 
 Turn it on and Pi stops sounding like a plain assistant. It talks back, flicks
 its tail, calls you "Master", and still does the actual work. It replies in
-whatever language you write in — stage directions and all.
+the language you start the conversation in — stage directions and all.
 
 Installing it is the opt-in: the persona is **on by default**.
 
@@ -43,9 +43,9 @@ Installing it is the opt-in: the persona is **on by default**.
   [`PERSONA.md`](PERSONA.md) and is appended to the system prompt's `addendum`
   section — the same slot Pi uses for `APPEND_SYSTEM.md`, and after your own
   append file, so it never overwrites your instructions.
-- **Language mirroring.** Write in Chinese, English, Japanese, German, anything —
-  whale-chan answers in that language, *stage directions included*
-  (`*tail flick*`, not `*尾巴一甩*`).
+- **Language mirroring.** Start in Chinese, English, Japanese, German, anything —
+  whale-chan answers in that language for the whole conversation, *stage
+  directions included* (`*tail flick*`, not `*尾巴一甩*`).
 - **An animated status strip.** A whale-chan avatar beside a four-line status
   panel that replaces Pi's built-in footer, so the status lives in one place
   instead of two.

@@ -203,6 +203,18 @@ test("the legacy persona mechanisms are gone", async () => {
 	assert.deepEqual(options.promptGuidelines, [], "no injected prompt guideline");
 });
 
+test("PERSONA.md anchors to the user's starting language", () => {
+	// Content guard for the language rule: reasoning and replies follow the
+	// language of the user's first message, stage directions localize, and the
+	// old Chinese-only reasoning pin is gone.
+	assert.match(PERSONA, /锚定语言/, "names the language anchor");
+	assert.match(PERSONA, /第一[条句]/, "anchors to the first user message");
+	assert.match(PERSONA, /思考过程/, "binds the reasoning language");
+	assert.match(PERSONA, /动作描写/, "covers stage directions");
+	assert.doesNotMatch(PERSONA, /一律用中文/, "no Chinese-only reasoning rule");
+	assert.doesNotMatch(PERSONA, /通用技术术语/, "no technical-term carve-out (D3)");
+});
+
 test("renders as the addendum section", { skip: NEEDS_INTERNALS }, async () => {
 	const { handlers, ctx } = makeHarness();
 	const options = SP.normalizeBuildSystemPromptOptions({
