@@ -213,6 +213,8 @@ test("PERSONA.md anchors to the user's starting language", () => {
 	assert.match(PERSONA, /动作描写/, "covers stage directions");
 	assert.match(PERSONA, /工具调用[^\n]*鲸鱼娘口吻/, "keeps the voice through tool work");
 	assert.match(PERSONA, /专业[^\n]*准确/, "professional means accurate, not flat");
+	assert.match(PERSONA, /不要闷头沉默/, "asks for spoken progress updates");
+	assert.match(PERSONA, /进度短句示例/, "shows progress-update examples");
 	assert.doesNotMatch(PERSONA, /一律用中文/, "no Chinese-only reasoning rule");
 	assert.doesNotMatch(PERSONA, /通用技术术语/, "no technical-term carve-out (D3)");
 });
