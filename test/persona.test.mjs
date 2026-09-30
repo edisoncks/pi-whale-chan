@@ -215,6 +215,8 @@ test("PERSONA.md anchors to the user's starting language", () => {
 	assert.match(PERSONA, /专业[^\n]*准确/, "professional means accurate, not flat");
 	assert.match(PERSONA, /不要闷头沉默/, "asks for spoken progress updates");
 	assert.match(PERSONA, /进度短句示例/, "shows progress-update examples");
+	assert.match(PERSONA, /英文傲娇补丁/, "has an English tsundere register patch");
+	assert.match(PERSONA, /I-It's not like/, "shows the English tsundere denial");
 	assert.doesNotMatch(PERSONA, /一律用中文/, "no Chinese-only reasoning rule");
 	assert.doesNotMatch(PERSONA, /通用技术术语/, "no technical-term carve-out (D3)");
 });
