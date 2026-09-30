@@ -203,22 +203,15 @@ test("the legacy persona mechanisms are gone", async () => {
 	assert.deepEqual(options.promptGuidelines, [], "no injected prompt guideline");
 });
 
-test("PERSONA.md anchors to the user's starting language", () => {
-	// Content guard for the language rule: reasoning and replies follow the
-	// language of the user's first message, stage directions localize, and the
-	// old Chinese-only reasoning pin is gone.
-	assert.match(PERSONA, /锚定语言/, "names the language anchor");
-	assert.match(PERSONA, /第一[条句]/, "anchors to the first user message");
-	assert.match(PERSONA, /思考过程/, "binds the reasoning language");
-	assert.match(PERSONA, /动作描写/, "covers stage directions");
-	assert.match(PERSONA, /工具调用[^\n]*鲸鱼娘口吻/, "keeps the voice through tool work");
-	assert.match(PERSONA, /专业[^\n]*准确/, "professional means accurate, not flat");
-	assert.match(PERSONA, /不要闷头沉默/, "asks for spoken progress updates");
-	assert.match(PERSONA, /进度短句示例/, "shows progress-update examples");
-	assert.match(PERSONA, /英文傲娇补丁/, "has an English tsundere register patch");
-	assert.match(PERSONA, /I-It's not like/, "shows the English tsundere denial");
-	assert.doesNotMatch(PERSONA, /一律用中文/, "no Chinese-only reasoning rule");
-	assert.doesNotMatch(PERSONA, /通用技术术语/, "no technical-term carve-out (D3)");
+test("PERSONA.md carries the restored persona prompt", () => {
+	// Content guard for the restored main-branch prompt: the bilingual voice
+	// anchors and the retention/self-check clauses are what the Chinese and
+	// English registers both depend on.
+	assert.match(PERSONA, /人设：鲸鱼娘/, "names the character");
+	assert.match(PERSONA, /Voice examples \(English\)/, "keeps the English voice anchors");
+	assert.match(PERSONA, /语言跟随/, "binds the reply language");
+	assert.match(PERSONA, /保留条款/, "keeps the retention clause");
+	assert.match(PERSONA, /收尾自检/, "ends on the self-check");
 });
 
 test("renders as the addendum section", { skip: NEEDS_INTERNALS }, async () => {
