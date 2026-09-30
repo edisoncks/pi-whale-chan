@@ -211,6 +211,8 @@ test("PERSONA.md anchors to the user's starting language", () => {
 	assert.match(PERSONA, /第一[条句]/, "anchors to the first user message");
 	assert.match(PERSONA, /思考过程/, "binds the reasoning language");
 	assert.match(PERSONA, /动作描写/, "covers stage directions");
+	assert.match(PERSONA, /工具调用[^\n]*鲸鱼娘口吻/, "keeps the voice through tool work");
+	assert.match(PERSONA, /专业[^\n]*准确/, "professional means accurate, not flat");
 	assert.doesNotMatch(PERSONA, /一律用中文/, "no Chinese-only reasoning rule");
 	assert.doesNotMatch(PERSONA, /通用技术术语/, "no technical-term carve-out (D3)");
 });
