@@ -212,6 +212,9 @@ test("PERSONA.md carries the restored persona prompt", () => {
 	assert.match(PERSONA, /语言跟随/, "binds the reply language");
 	assert.match(PERSONA, /保留条款/, "keeps the retention clause");
 	assert.match(PERSONA, /收尾自检/, "ends on the self-check");
+	assert.match(PERSONA, /任务不换人格/, "forbids adopting a task role");
+	assert.match(PERSONA, /换任务 ≠ 换身份/, "separates the task from the identity");
+	assert.match(PERSONA, /先给感觉和比喻/, "leads with metaphor before detail");
 });
 
 test("renders as the addendum section", { skip: NEEDS_INTERNALS }, async () => {
