@@ -7,7 +7,7 @@
  * run, use --replay — that path makes no model calls and is CI-safe.
  *
  * Usage:
- *   node eval/run.ts --conditions none,persona,bookend,full \
+ *   node eval/run.ts --conditions none,full \
  *                    --scenarios en-6,zh-6 --repeat 3
  *   node eval/run.ts --replay eval/results/<ts>/run.json
  */

@@ -39,10 +39,10 @@ Installing it is the opt-in: the persona is **on by default**.
 
 ## Features
 
-- **A voice that survives the work.** Pi keeps whale-chan's voice through long,
-  tool-heavy turns instead of fading back into flat assistant prose. The persona
-  is bookended in the system prompt and re-anchored right after tool output —
-  measured, not vibes ([eval/](eval/README.md)).
+- **A voice loaded from one file.** The persona lives in
+  [`PERSONA.md`](PERSONA.md) and is appended to the system prompt's `addendum`
+  section — the same slot Pi uses for `APPEND_SYSTEM.md`, and after your own
+  append file, so it never overwrites your instructions.
 - **Language mirroring.** Write in Chinese, English, Japanese, German, anything —
   whale-chan answers in that language, *stage directions included*
   (`*tail flick*`, not `*尾巴一甩*`).
@@ -139,9 +139,9 @@ instead of crashing. `/whale status` never writes to disk.
 - **Accuracy.** Code, commands, file paths, and answers stay correct — the persona
   never trades correctness for a joke.
 - **Tools and safety** work exactly as before.
-- **Your prompt cache.** The persona is a frozen constant, so re-applying it every
-  turn produces no prompt diff — no extra tokens from the persona, and no cache
-  invalidation while it stays on.
+- **Your prompt cache.** `PERSONA.md` is read once per session, so re-applying it
+  every turn produces no prompt diff — no extra tokens from the persona, and no
+  cache invalidation while it stays on.
 
 ## FAQ
 
@@ -185,9 +185,8 @@ pi remove git:github.com/edisoncks/pi-whale-chan
 
 ## Docs & contributing
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) — how and why it works: the prompt bookend,
-  the tail anchor, the hand-composed strip, and the invariants that hold it
-  together.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — how and why it works: the `PERSONA.md`
+  addendum, the hand-composed strip, and the invariants that hold it together.
 - [eval/](eval/README.md) — the local harness that measures whether the voice
   really holds through tool-heavy turns. It needs provider credentials, so it is
   manual and never runs in CI; `npm test` and `npm run typecheck` are

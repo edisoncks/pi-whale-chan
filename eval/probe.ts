@@ -6,9 +6,9 @@
  * Run:  node eval/probe.ts [provider/id] [toolCalls]
  *   e.g. node eval/probe.ts opencode-go/deepseek-v4.1-flash 6
  *
- * Why the resolve hook: index.ts imports "./persona.js" (a NodeNext .js specifier
+ * Why the resolve hook: index.ts imports "./pet.js" (a NodeNext .js specifier
  * that points at a .ts file). Node does not rewrite that itself, so we remap it,
- * exactly like test/bookend.test.mjs does.
+ * exactly like test/persona.test.mjs does.
  */
 // Side-effect import: installs the NodeNext ".js -> .ts" resolve hook before the
 // dynamic import of index.ts below.

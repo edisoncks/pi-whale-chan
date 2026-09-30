@@ -1,6 +1,6 @@
 /**
  * Shared eval plumbing: the Node resolve hook that remaps the extension's
- * NodeNext "./persona.js" specifier to "./persona.ts" (Node does not rewrite .js
+ * NodeNext "./pet.js" specifier to "./pet.ts" (Node does not rewrite .js
  * specifiers itself), plus the deterministic, persona-free fake tool.
  *
  * Imported for its side effect (`registerHooks`) by harness.ts and probe.ts. A
