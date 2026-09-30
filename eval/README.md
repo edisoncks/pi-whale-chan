@@ -1,9 +1,9 @@
 # eval — whale-chan voice-drift measurement
 
-Measures whether the persona mechanisms actually keep Pi in whale-chan's voice
+Measures whether loading PERSONA.md actually keeps Pi in whale-chan's voice
 through long, tool-heavy turns — the failure mode the extension exists to fix.
-The unit tests prove the *mechanism* (the anchors get injected); this proves the
-*effect* (the model's behavior changes).
+The unit tests prove the *mechanism* (the persona lands in the system prompt);
+this proves the *effect* (the model's behavior changes).
 
 ## Sessions are LOCAL ONLY — do not wire into CI
 
@@ -36,29 +36,18 @@ scorer in [`scorer.ts`](./scorer.ts):
 ## Ablation ladder
 
 `harness.ts` loads **this repo's** `index.ts` with an explicit mechanism set
-(`WhaleMechanisms`), so each mechanism's contribution is isolated:
+(`WhaleMechanisms`), so persona-on can be compared with the flat-assistant
+baseline:
 
-| condition | persona (tail) | head rule | tail anchor |
-|---|:---:|:---:|:---:|
-| `none` | – | – | – |
-| `persona` | ✅ | – | – |
-| `bookend` | ✅ | ✅ | – |
-| `full` | ✅ | ✅ | ✅ |
+| condition | PERSONA.md appended |
+|---|:---:|
+| `none` | – |
+| `full` | ✅ |
 
-Read the delta between rungs: `bookend` − `persona` isolates the head rule,
-`full` − `bookend` isolates the tail anchor.
-
-A clean `bookend,full` run at n=30/arm (en-6+zh-6) gives the tail anchor a
-measurable edge: 77% → 87% in-character, 80% → 90% language match, 75% → 79%
-stage-language, mean voice 5.40 → 5.87. One model, no confidence intervals —
-indicative, not precise. Earlier stored runs did not isolate this cleanly (their
-n=30 compared `bookend+B` vs `full`; the clean pair was only n=8).
-
-A second mechanism — a throttled tool-result anchor ("A") — was evaluated here
-and **removed**: across n=30 per arm it showed no measurable effect
-(in-character 29/30 with and without it; language and stage-language deltas
-within one or two samples). See [the merged implementation PR](https://github.com/edisoncks/pi-whale-chan/pull/1)
-and the [pinned experiment notes](https://github.com/edisoncks/pi-whale-chan/blob/9a0108185ad72977d5685911256cd24f3abba403/eval/README.md#L52-L58).
+`full` is the production default. Read `full` − `none` for the persona's overall
+effect. Earlier runs (stored under `eval/results/`) used a
+`none`/`persona`/`bookend`/`full` ladder that isolated the now-removed head rule
+and tail anchor; those condition names no longer exist.
 
 ## Run it
 
@@ -66,8 +55,8 @@ and the [pinned experiment notes](https://github.com/edisoncks/pi-whale-chan/blo
 # cheap smoke: one condition, one scenario
 npm run eval -- --scenarios en-6 --conditions full
 
-# full ladder
-npm run eval -- --conditions none,persona,bookend,full \
+# persona on vs flat baseline
+npm run eval -- --conditions none,full \
                 --scenarios en-6,zh-6 --repeat 3
 
 # one-shot raw transcript, to eyeball by hand before trusting any metric
@@ -88,5 +77,5 @@ gitignored.
 - **The scorer can be gamed** (keyword Goodhart). Calibrate thresholds against a
   small human-labelled gold set before relying on it, and treat it as a smoke
   signal — not ground truth.
-- **Model-specific.** Anchor channels are discounted differently per model; run
-  the ladder per model before generalizing.
+- **Model-specific.** Prompt-position effects differ per model; run the ladder
+  per model before generalizing.

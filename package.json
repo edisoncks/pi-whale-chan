@@ -1,7 +1,7 @@
 {
   "name": "pi-whale-chan",
   "version": "1.1.0",
-  "description": "Pi extension that loads the DeepSeek whale-chan persona into the system prompt, with a /whale toggle.",
+  "description": "Pi extension that loads the whale-chan persona from PERSONA.md into the system prompt, with a /whale toggle.",
   "type": "module",
   "license": "MIT",
   "private": false,
@@ -19,7 +19,7 @@
   "files": [
     "index.ts",
     "pet.ts",
-    "persona.ts",
+    "PERSONA.md",
     "README.md",
     "README.zh-CN.md",
     "ARCHITECTURE.md",

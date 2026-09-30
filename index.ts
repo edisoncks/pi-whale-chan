@@ -5,24 +5,17 @@
  * /whale to toggle it. The preference persists in the Pi agent dir.
  *
  * Cache-safety contract (see ARCHITECTURE.md):
- * - We mutate event.systemPromptOptions.sections, never return systemPrompt
- *   and never set forceSystemPrompt. Pi therefore emits a section diff patch
- *   instead of a full-prompt checkpoint.
- * - The persona text is a frozen constant (persona.ts): no cwd/date/model
- *   interpolation, so re-setting it every turn produces no diff.
- * - Custom sections render after `cwd`, so a toggle only moves the prompt tail.
- * - The persona is bookended: the full text is the tail section, and a short
- *   voice rule is merged into the early `rules` section via promptGuidelines.
- *   Both are frozen constants and injection is idempotent, so the bookend is
- *   still diff-free while the persona stays on.
- * - Bookends live in the system prompt, which sits before all tool output, so
- *   they cannot anchor generation that follows a tool result. One append-only
- *   recency anchor closes that gap: a transient user-role tail anchor via the
- *   `context` event. A clean `bookend` vs `full` ablation at n=30/arm measures
- *   the gain (+10pp in-character, +10pp language match); see ARCHITECTURE.md.
- *   It is a pure append, so it cannot invalidate the cached prefix. (A second,
- *   tool-result anchor was tried and removed: it showed no measurable effect —
- *   see eval/README.md.)
+ * - We mutate event.systemPromptOptions.appendSystemPrompt, never return
+ *   systemPrompt and never set forceSystemPrompt. Pi therefore emits a section
+ *   diff patch instead of a full-prompt checkpoint.
+ * - appendSystemPrompt renders as the `addendum` section, the same slot Pi uses
+ *   for APPEND_SYSTEM.md, and Pi joins multiple sources with a blank line. So
+ *   the persona sits after the user's own APPEND_SYSTEM.md content, and toggling
+ *   it changes only that one section.
+ * - PERSONA.md is read once and cached, so re-applying it every turn produces no
+ *   diff and never invalidates the prompt cache while it stays on.
+ * - Injection is idempotent and reversible: a prior copy is stripped before the
+ *   fresh append, so a shared options object cannot accumulate copies.
  * - The pet strip is display-only: it sits above the editor as an extension
  *   widget and replaces Pi's built-in footer by mounting an empty footer (so
  *   the strip, not the footer, owns the status line). It is driven by agent
@@ -39,10 +32,14 @@ import {
 	type ExtensionContext,
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { WHALE_PERSONA, WHALE_VOICE_RULE, WHALE_TAIL_ANCHOR } from "./persona.js";
 import { WhalePetWidget, type PetFooterData, type PetStats } from "./pet.js";
 
-const SECTION_NAME = "whale_persona";
+/**
+ * Bundled persona text, read once (see `loadPersonaText`) and cached so the
+ * injected `addendum` section is byte-stable across turns. `import.meta.url`
+ * resolves next to this module in both the repo and an installed package.
+ */
+const PERSONA_PATH = new URL("./PERSONA.md", import.meta.url);
 const STATE_FILE = "whale-chan.json";
 /** Widget key for the animated pet strip above the editor. */
 const PET_WIDGET_KEY = "whale_pet";
@@ -63,24 +60,47 @@ class EmptyFooter {
 
 /**
  * Mechanism switches — ablation only. Production (Pi) calls the factory with one
- * argument and gets every mechanism; the eval harness passes explicit flags so
- * an effect can be attributed to a single mechanism (see eval/run.ts). Defaults
- * keep production behavior byte-identical.
+ * argument and gets the persona; the eval harness passes an explicit flag so the
+ * flat-assistant baseline (`none`) can be compared against persona-on (`full`).
  */
 export interface WhaleMechanisms {
-	/** Tail section: the full persona body (`WHALE_PERSONA`). */
+	/** Append PERSONA.md to the system prompt's `addendum` section. */
 	readonly persona?: boolean;
-	/** Head rule: `WHALE_VOICE_RULE` merged into `promptGuidelines`. */
-	readonly headRule?: boolean;
-	/** Transient user-role tail anchor after a tool result. */
-	readonly tailAnchor?: boolean;
 }
 
 const ALL_MECHANISMS: Required<WhaleMechanisms> = {
 	persona: true,
-	headRule: true,
-	tailAnchor: true,
 };
+
+/**
+ * Cached PERSONA.md text. `undefined` = not read yet, `null` = missing or
+ * unreadable. Reading lazily keeps extension load IO-free; caching keeps the
+ * injected section byte-stable across turns. `before_agent_start` is the read
+ * point for headless sessions that never emit `session_start`.
+ */
+let personaText: string | null | undefined;
+
+export function loadPersonaText(): string | null {
+	if (personaText !== undefined) return personaText;
+	try {
+		personaText = readFileSync(PERSONA_PATH, "utf8").trim() || null;
+	} catch {
+		personaText = null;
+	}
+	return personaText;
+}
+
+/** Drop a prior trailing persona copy, so re-applying is idempotent/reversible. */
+function withoutPersona(append: string, text: string): string {
+	const suffix = `\n\n${text}`;
+	return append.endsWith(suffix) ? append.slice(0, -suffix.length) : append;
+}
+
+/** The `appendSystemPrompt` value with the persona appended exactly once. */
+function withPersona(append: string, text: string): string {
+	const base = withoutPersona(append, text);
+	return base ? `${base}\n\n${text}` : text;
+}
 
 // No agent dir: memory-only. Never fall back to a relative path and litter
 // the user's CWD with a state file.
@@ -393,6 +413,9 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 		const { config, corrupt } = loadConfig();
 		enabled = config.enabled;
 		petEnabled = config.pet;
+		if (enabled && loadPersonaText() === null) {
+			ctx.ui.notify("[whale-chan] PERSONA.md not found; persona will not be injected", "warning");
+		}
 		if (corrupt) {
 			ctx.ui.notify("[whale-chan] corrupt config: invalid values reset to defaults", "warning");
 			const persistError = saveConfig(config);
@@ -463,60 +486,23 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 		}
 	});
 
-	// Section patch, not prompt replacement: Pi diffs sections and appends only
-	// what changed. Re-setting an unchanged frozen string yields no diff.
-	//
-	// Bookend: the full persona is the tail section, while WHALE_VOICE_RULE is
-	// merged into the early `rules` section (promptGuidelines). Tool output is
-	// appended after the system prompt and pushes the tail out of recency, so
-	// the head rule is the counter-pressure.
+	// Append the persona to the same `addendum` section Pi uses for
+	// APPEND_SYSTEM.md: a section patch, not a prompt replacement, so Pi diffs
+	// sections and sends only what changed. The persona is read once and cached,
+	// so re-applying it every turn is diff-free while it stays on.
 	//
 	// Each turn Pi calls `emitBeforeAgentStart`, which normalizes the base
-	// options into a fresh clone before invoking handlers, so `guidelines` here
-	// is a per-turn copy that never reaches `_baseSystemPromptOptions`. A bare
-	// push could not accumulate across turns. The `includes` guard is defensive
-	// insurance (should Pi ever hand handlers the shared base object), and
-	// removal on `off` keeps a shared array consistent if that day comes.
+	// options into a fresh clone before invoking handlers; the base object (and
+	// the user's own APPEND_SYSTEM.md content) is never mutated. The helpers are
+	// still idempotent and reversible, so a hypothetical shared object could
+	// neither accumulate copies nor keep the persona after `off`.
 	pi.on("before_agent_start", (event) => {
+		const text = loadPersonaText();
+		if (text === null) return;
 		const options = event.systemPromptOptions;
-		const guidelines = options.promptGuidelines;
-		// Tail section (persona body) and head rule (bookend) are independent
-		// switches so the harness can isolate them; `off` clears both.
-		if (enabled && M.persona) {
-			options.sections[SECTION_NAME] = WHALE_PERSONA;
-		} else {
-			delete options.sections[SECTION_NAME];
-		}
-		if (enabled && M.headRule) {
-			if (!guidelines.includes(WHALE_VOICE_RULE)) {
-				guidelines.push(WHALE_VOICE_RULE);
-			}
-		} else {
-			for (let i = guidelines.length - 1; i >= 0; i--) {
-				if (guidelines[i] === WHALE_VOICE_RULE) guidelines.splice(i, 1);
-			}
-		}
-	});
-
-	// Authoritative tail anchor. `context` runs before every provider call
-	// and Pi restores the message list afterward, so this append is transient.
-	// It fires only when the last message is a tool result: that is the moment
-	// generation follows tool output and the register is most likely to drift.
-	// `custom` maps to user role (convertToLlm), so it carries instruction
-	// authority the system-prompt bookend cannot reach at that position. A pure
-	// tail append, so no cached prefix is invalidated.
-	pi.on("context", (event) => {
-		if (!enabled || !M.tailAnchor) return;
-		const last = event.messages[event.messages.length - 1];
-		if (!last || last.role !== "toolResult") return;
-		const anchor = {
-			role: "custom" as const,
-			customType: "whale_tail_anchor",
-			content: WHALE_TAIL_ANCHOR,
-			display: false,
-			timestamp: Date.now(),
-		};
-		return { messages: [...event.messages, anchor] };
+		const current = options.appendSystemPrompt ?? "";
+		options.appendSystemPrompt =
+			enabled && M.persona ? withPersona(current, text) : withoutPersona(current, text);
 	});
 
 	pi.registerCommand("whale", {
@@ -573,6 +559,9 @@ export default function whaleChan(pi: ExtensionAPI, mechanisms: WhaleMechanisms 
 			if (persistError) {
 				ctx.ui.notify(`[whale-chan] could not persist setting: ${persistError}`, "warning");
 				return;
+			}
+			if (enabled && loadPersonaText() === null) {
+				ctx.ui.notify("[whale-chan] PERSONA.md not found; persona will not be injected", "warning");
 			}
 			ctx.ui.notify(enabled ? "whale-chan persona: on" : "whale-chan persona: off", "info");
 		},

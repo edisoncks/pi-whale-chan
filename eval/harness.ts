@@ -8,7 +8,7 @@
  * the real auth.json). Nothing here belongs in CI — see eval/README.md.
  */
 // Side-effect import: installs the NodeNext ".js -> .ts" resolve hook (index.ts
-// imports "./persona.js") before index.ts is dynamically imported below.
+// imports "./pet.js") before index.ts is dynamically imported below.
 import "./shared.ts";
 import { registerProbeTool } from "./shared.ts";
 
@@ -30,22 +30,18 @@ const REPO = join(HERE, "..");
 
 const { default: whaleChan } = await import(pathToFileURL(join(REPO, "index.ts")).href);
 
-/** Mechanism flags, mirroring index.ts's `WhaleMechanisms`. */
+/** Mechanism flag, mirroring index.ts's `WhaleMechanisms`. */
 export interface Conditions {
 	persona: boolean;
-	headRule: boolean;
-	tailAnchor: boolean;
 }
 
 /**
- * Ablation ladder. `none` is the flat-assistant baseline; each rung adds one
- * mechanism so the effect of each can be read off the delta.
+ * Ablation ladder. `none` is the flat-assistant baseline (no PERSONA.md);
+ * `full` is production (PERSONA.md appended to the `addendum` section).
  */
 export const CONDITIONS: Record<string, Conditions> = {
-	none: { persona: false, headRule: false, tailAnchor: false },
-	persona: { persona: true, headRule: false, tailAnchor: false },
-	bookend: { persona: true, headRule: true, tailAnchor: false },
-	full: { persona: true, headRule: true, tailAnchor: true }, // production default
+	none: { persona: false },
+	full: { persona: true }, // production default
 };
 
 export interface RunResult {
